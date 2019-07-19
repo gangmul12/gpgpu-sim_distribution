@@ -1096,3 +1096,9 @@ void maxnt_id(int x, int y, int z) {
 void func_header(const char* a) {} //intentional dummy function
 void func_header_info(const char* a) {} //intentional dummy function
 void func_header_info_int(const char* a, int b) {} //intentional dummy function
+
+//EDIT_45
+void setSaveInsts( bool var )
+{
+   save_insts = var;
+}
