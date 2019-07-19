@@ -245,6 +245,11 @@ void function_info::ptx_assemble()
    unsigned num_inst = m_instructions.size();
    m_instr_mem_size = MAX_INST_SIZE*(num_inst+1);
    m_instr_mem = new ptx_instruction*[ m_instr_mem_size ];
+   
+
+   static long long int size_of_func_mem = 0;
+   size_of_func_mem += m_instr_mem_size;
+   printf("size of total func m_instr_mem : %d\n", size_of_func_mem);
 
    printf("GPGPU-Sim PTX: instruction assembly for function \'%s\'... ", m_name.c_str() );
    fflush(stdout);
@@ -1840,8 +1845,8 @@ unsigned ptx_sim_init_thread( kernel_info_t &kernel,
       ptx_cta_lookup[sm_idx] = cta_info;
    } else {
       if ( g_debug_execution >= 1 ) {
-         printf("  <CTA realloc> : sm_idx=%u sid=%u max_cta_per_sm=%u\n", 
-                sm_idx, sid, max_cta_per_sm );
+   //      printf("  <CTA realloc> : sm_idx=%u sid=%u max_cta_per_sm=%u\n", 
+    //            sm_idx, sid, max_cta_per_sm );
       }
       shared_mem = shared_memory_lookup[sm_idx];
       sstarr_mem = sstarr_memory_lookup[sm_idx];
@@ -2272,6 +2277,9 @@ void functionalCoreSim::initializeCTA(unsigned ctaid_cp)
         if(cp_cta_resume==1)
             m_thread[i]->resume_reg_thread(fname,symtab);
         ctaLiveThreads++;
+    }
+	 if ( g_debug_execution >= 1 ) {
+         printf("  <CTA Init> : cta_idx=%u\n", ctaid_cp);
     }
 
     for(int k=0;k<m_warp_count;k++)

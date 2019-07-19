@@ -339,7 +339,8 @@ void gpgpu_ptx_info_load_from_filename( const char *filename, unsigned sm_versio
 	       	snprintf(extra_flags,1024,"--compile-only --gpu-name=sm_%u",sm_version);
    	snprintf(buff,1024,"$CUDA_INSTALL_PATH/bin/ptxas %s -v %s --output-file  /dev/null 2> %s",
          extra_flags, filename, ptxas_filename.c_str());
-	int result = system(buff);
+		std::ifstream f(ptxas_filename.c_str());
+	int result = f.good()? 0 : system(buff);
 	if( result != 0 ) {
 		printf("GPGPU-Sim PTX: ERROR ** while loading PTX (b) %d\n", result);
 		printf("               Ensure ptxas is in your path.\n");

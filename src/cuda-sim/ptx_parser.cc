@@ -45,6 +45,8 @@ static bool g_debug_ir_generation=false;
 const char *g_filename;
 unsigned g_max_regs_per_thread = 0;
 
+static bool save_insts = false;
+
 // the program intermediate representation...
 static symbol_table *g_global_allfiles_symbol_table = NULL;
 static symbol_table *g_global_symbol_table = NULL;
@@ -171,10 +173,11 @@ symbol_table *init_parser( const char *ptx_filename )
 
    init_directive_state();
    init_instruction_state();
-
+#if(CUDART_VERSION >= 6000)
    ptx_in = fopen(ptx_filename, "r");
    ptx_parse();
    fclose(ptx_in);
+#endif
    return g_global_symbol_table;
 }
 
@@ -232,6 +235,9 @@ void add_directive()
 
 #define mymax(a,b) ((a)>(b)?(a):(b))
 
+static long long int num_of_inst = 0;
+static double size_of_inst = 0;
+
 void end_function() 
 {
    PTX_PARSE_DPRINTF("end_function");
@@ -239,6 +245,14 @@ void end_function()
    init_directive_state();
    init_instruction_state();
    g_max_regs_per_thread = mymax( g_max_regs_per_thread, (g_current_symbol_table->next_reg_num()-1)); 
+   
+
+   //set m_no_inst = false
+   if(save_insts)
+      g_func_info->m_no_inst = false;
+   else
+	  g_func_info->m_no_inst = true;
+
    g_func_info->add_inst( g_instructions );
    g_instructions.clear();
    gpgpu_ptx_assemble( g_func_info->get_name(), g_func_info );
@@ -304,7 +318,13 @@ void add_instruction()
 {
    PTX_PARSE_DPRINTF("add_instruction: %s", ((g_opcode>0)?g_opcode_string[g_opcode]:"<label>") );
    assert( g_shader_core_config != 0 );
-   ptx_instruction *i = new ptx_instruction( g_opcode, 
+   
+   
+#if (CUDART_VERSION >= 6000)
+   if(save_insts)
+   {
+#endif
+      ptx_instruction *i = new ptx_instruction( g_opcode, 
                                              g_pred, 
                                              g_neg_pred,
                                              g_pred_mod, 
@@ -319,8 +339,21 @@ void add_instruction()
                                              ptx_lineno,
                                              linebuf,
                                              g_shader_core_config );
-   g_instructions.push_back(i);
-   g_inst_lookup[g_filename][ptx_lineno] = i;
+   
+
+	  g_instructions.push_back(i);
+	  g_inst_lookup[g_filename][ptx_lineno] = i;
+#if (CUDART_VERSION >= 6000)
+  
+      size_of_inst += (double)sizeof(*i);
+
+   }
+   
+   else
+   {
+      num_of_inst++;
+   }
+#endif
    init_instruction_state();
 }
 
@@ -408,8 +441,8 @@ void add_identifier( const char *identifier, int array_dim, unsigned array_ident
       g_last_symbol = s;
       if( g_func_decl ) 
          return;
-      std::string msg = std::string(identifier) + " was declared previous at " + s->decl_location() + " skipping new declaration"; 
-      printf("GPGPU-Sim PTX: Warning %s\n", msg.c_str());
+      //std::string msg = std::string(identifier) + " was declared previous at " + s->decl_location() + " skipping new declaration"; 
+      //printf("GPGPU-Sim PTX: Warning %s\n", msg.c_str());
       return;
    }
 
