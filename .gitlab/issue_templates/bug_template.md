@@ -1,24 +1,24 @@
 bug issue template
 ==========
 # Environment
-Server :
-OS :
-gcc/g++ :
-CUDA :
-cudnn version (if used) :
-python version (if used) :
-pytorch version (if used) :
+Server :  
+OS :  
+gcc/g++ :  
+CUDA :  
+cudnn version (if used) :  
+python version (if used) :  
+pytorch version (if used) :  
 
 # gpgpusim.config
-if functional sim issue
-maximum sm capability :
+if functional sim issue  
+maximum sm capability :  
 
-if performance sim issue
-related config
+if performance sim issue  
+related config  
 
 
 # application
-description:
+description:  
 
 # bug description
 
