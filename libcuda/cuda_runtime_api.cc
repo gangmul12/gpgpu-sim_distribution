@@ -1489,15 +1489,18 @@ __host__ cudaError_t CUDARTAPI cudaLaunch( const char *hostFun )
 			g_ptx_sim_mode?"functional simulation":"performance simulation", stream?stream->get_uid():0 );
 	kernel_info_t *grid = gpgpu_cuda_ptx_sim_init_grid(hostFun,config.get_args(),config.grid_dim(),config.block_dim(),context);
         //do dynamic PDOM analysis for performance simulation scenario
-	std::string kname = grid->name();
+	
 	function_info *kernel_func_info = grid->entry();
+	std::string kname = std::string("no_impl");
 	if(kernel_func_info){
-	if (kernel_func_info->is_pdom_set()) {
+	
+		kname = grid->name();
+		if (kernel_func_info->is_pdom_set()) {
     		printf("GPGPU-Sim PTX: PDOM analysis already done for %s \n", kname.c_str() );
     	} else {
     		printf("GPGPU-Sim PTX: finding reconvergence points for \'%s\'...\n", kname.c_str() );
-		kernel_func_info->do_pdom();
-		kernel_func_info->set_pdom();
+			kernel_func_info->do_pdom();
+			kernel_func_info->set_pdom();
     	}
 	}
 	dim3 gridDim = config.grid_dim();
@@ -1524,7 +1527,8 @@ __host__ cudaError_t CUDARTAPI cudaLaunch( const char *hostFun )
 		char f1name[2048];
 	    snprintf(f1name,2048,"checkpoint_files/global_mem_%d.txt", grid->get_uid());
 
-	    g_checkpoint->load_global_mem(global_mem, f1name);	
+	   if(grid->get_uid() == gpu->resume_kernel - 1 )
+			g_checkpoint->load_global_mem(global_mem, f1name);	
 		printf("Skipping kernel %d as resuming from kernel %d\n",grid->get_uid(),gpu->resume_kernel );
 		g_cuda_launch_stack.pop_back();
 		return g_last_cudaError = cudaSuccess;

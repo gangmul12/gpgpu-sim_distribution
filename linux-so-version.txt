@@ -1,3 +1,5 @@
+libcudart.so.8.0{
+};
 libcudart.so.9.0{
 };
 libcudart.so.9.1{
