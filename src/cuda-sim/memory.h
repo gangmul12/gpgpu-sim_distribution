@@ -90,6 +90,9 @@ public:
       fprintf(fout, "\n");
       fflush(fout);
    }
+	bool equals(const mem_storage &another){
+		return memcmp(m_data, another.m_data, BSIZE)==0;
+	}
 
 private:
    unsigned m_nbytes;
@@ -119,7 +122,8 @@ public:
    virtual void read( mem_addr_t addr, size_t length, void *data ) const;
    virtual void print( const char *format, FILE *fout ) const;
    
-   virtual void set_watch( addr_t addr, unsigned watchpoint ); 
+   virtual void set_watch( addr_t addr, unsigned watchpoint );
+	class memory_space_impl<BSIZE>* generate_patch(const class memory_space_impl* old);
 
 private:
    void read_single_block( mem_addr_t blk_idx, mem_addr_t addr, size_t length, void *data) const; 

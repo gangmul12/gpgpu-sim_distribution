@@ -96,7 +96,11 @@ void checkpoint::store_global_mem(class memory_space * mem, char *fname, char * 
       mem->print(format,fp3);
       fclose(fp3);
 }
-
+/*
+class memory_space* checkpoint::generate_patch(class memory_space_impl* new_memory, class memory_space_impl* old_memory){
+	 return new_memory->generate_patch(old_memory);	
+}
+*/
 void move_warp( warp_inst_t *&dst, warp_inst_t *&src )
 {
    assert( dst->empty() );

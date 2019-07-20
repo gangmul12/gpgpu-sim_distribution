@@ -2214,7 +2214,26 @@ void gpgpu_cuda_ptx_sim_main_func( kernel_info_t &kernel, bool openCL )
 	{
       char f1name[2048];
       snprintf(f1name,2048,"checkpoint_files/global_mem_%d.txt", kernel.get_uid() );
+		char patch_fname[2048];
+      snprintf(patch_fname,2048,"checkpoint_files/global_mem_patch_%d.txt", kernel.get_uid() );
+
+		char old_fname[2048];
+		class memory_space_impl<8192>* old_memory = new memory_space_impl<8192>("old_global", 64*1024);
+		class memory_space* patch_memory;
+		snprintf(old_fname, 2048, "checkpoint_files/global_mem_%d.txt", kernel.get_uid()-1);
+		if(kernel.get_uid() != 0)
+			g_checkpoint->load_global_mem(old_memory, old_fname);
+		class memory_space_impl<8192>* temp = dynamic_cast<memory_space_impl<8192>*>(g_the_gpu->get_global_memory());
+		assert(temp != NULL);
+		patch_memory = temp->generate_patch(old_memory);
+		g_checkpoint->store_global_mem(patch_memory, patch_fname, "%08x");
+		if(kernel.get_uid()%10 != 1){
+			int _del_result = remove(old_fname);
+			assert((_del_result==0) && "Error while deleting temp checkpoint file\n");
+		}
       g_checkpoint->store_global_mem(g_the_gpu->get_global_memory(), f1name , "%08x");
+
+		delete old_memory;
 	}
 
 
