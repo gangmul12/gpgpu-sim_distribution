@@ -2221,7 +2221,7 @@ void gpgpu_cuda_ptx_sim_main_func( kernel_info_t &kernel, bool openCL )
 		class memory_space_impl<8192>* old_memory = new memory_space_impl<8192>("old_global", 64*1024);
 		class memory_space* patch_memory;
 		snprintf(old_fname, 2048, "checkpoint_files/global_mem_%d.txt", kernel.get_uid()-1);
-		if(kernel.get_uid() != 0)
+		if(kernel.get_uid() != 1)
 			g_checkpoint->load_global_mem(old_memory, old_fname);
 		class memory_space_impl<8192>* temp = dynamic_cast<memory_space_impl<8192>*>(g_the_gpu->get_global_memory());
 		assert(temp != NULL);
