@@ -172,7 +172,6 @@ template<unsigned BSIZE> class memory_space_impl<BSIZE>* memory_space_impl<BSIZE
 			class mem_storage<BSIZE> old_mem = old->m_data.find(i_page->first)->second;
 			if(!new_mem.equals(old_mem)){
 				result->m_data.insert(std::make_pair(i_page->first, i_page->second));
-				printf("exist but not same\n");
 			}
 		}
 		else{
