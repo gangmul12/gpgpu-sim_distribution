@@ -202,6 +202,8 @@ bool stream_operation::do_operation( gpgpu_sim *gpu )
             printf("stream wait event done\n");
             m_stream->record_next_done();
         }
+									 }
+
         break;
     default:
         abort();
