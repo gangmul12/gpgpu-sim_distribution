@@ -108,6 +108,8 @@ public:
    virtual void read( mem_addr_t addr, size_t length, void *data ) const = 0;
    virtual void print( const char *format, FILE *fout ) const = 0;
    virtual void set_watch( addr_t addr, unsigned watchpoint ) = 0;
+	virtual void alloc(mem_addr_t addr, size_t length) = 0;
+	virtual void free(mem_addr_t) = 0;
 };
 
 template<unsigned BSIZE> class memory_space_impl : public memory_space {
@@ -118,8 +120,9 @@ public:
    virtual void write_only( mem_addr_t index, mem_addr_t offset, size_t length, const void *data);
    virtual void read( mem_addr_t addr, size_t length, void *data ) const;
    virtual void print( const char *format, FILE *fout ) const;
-   
-   virtual void set_watch( addr_t addr, unsigned watchpoint ); 
+   virtual void set_watch( addr_t addr, unsigned watchpoint );
+	virtual void alloc(mem_addr_t addr, size_t length);
+	virtual void free(mem_addr_t);
 
 private:
    void read_single_block( mem_addr_t blk_idx, mem_addr_t addr, size_t length, void *data) const; 
@@ -127,7 +130,11 @@ private:
    unsigned m_log2_block_size;
    typedef mem_map<mem_addr_t,mem_storage<BSIZE> > map_t;
    map_t m_data;
-   std::map<unsigned,mem_addr_t> m_watchpoints;
+	typedef mem_map<mem_addr_t,size_t> mem_meta_t;
+   mem_meta_t m_alloc;
+	mem_meta_t m_free;
+	std::map<unsigned,mem_addr_t> m_watchpoints;
+
 };
 
 #endif

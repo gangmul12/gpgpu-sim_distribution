@@ -160,7 +160,17 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::set_watch( addr_t addr, 
 {
    m_watchpoints[watchpoint]=addr;
 }
+template<unsigned BSIZE> void memory_space_impl<BSIZE>::alloc(mem_addr_t addr, size_t length){
+	m_alloc[addr] = size;
+}
+template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
+	assert(m_alloc.count(addr)!=0 && "try to free unallocated region");
+	size_t length = m_alloc[addr];
+	size_t ret = m_alloc.erase(addr);
+	auto i = m_free.insert(std::make_pair(addr, length));
 
+
+}
 template class memory_space_impl<32>;
 template class memory_space_impl<64>;
 template class memory_space_impl<8192>;
