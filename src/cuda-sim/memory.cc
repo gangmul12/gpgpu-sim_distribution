@@ -185,19 +185,22 @@ template<unsigned BSIZE> class memory_space_impl<BSIZE>* memory_space_impl<BSIZE
 
 template<unsigned BSIZE> bool memory_space_impl<BSIZE>::equals(const class memory_space_impl* other) const {
 	if(m_data.size() != other->m_data.size()){
+		printf("Info : two size are different %d %d\n", m_data.size(), other->m_data.size());
 		return false;
 	}
 	typename map_t::const_iterator i_page;
 	for( i_page = m_data.begin(); i_page != m_data.end(); ++i_page){
-		if(other->m_data.count(i_page->first) > 0)
+		if(other->m_data.count(i_page->first) == 0){
+			printf("Info : other doenst have block");
+			i_page->second.print("%x",stderr);
 			return false;
-		if( !(
-					(i_page->second).equals(  
-						other->m_data.find(i_page->first)->second  
-					)
-				) 
-			)
+		}
+		if( !(	(i_page->second).equals( other->m_data.find(i_page->first)->second )	) ){
+			printf("Info : memory block is existed, but not equal at %x\n", i_page->first);
+			i_page->second.print("%x", stderr);
+			other->m_data.find(i_page->first)->second.print("%x", stderr);
 			return false;
+		}
 	}
 	return true;
 }

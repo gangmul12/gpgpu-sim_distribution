@@ -2240,8 +2240,8 @@ void gpgpu_cuda_ptx_sim_main_func( kernel_info_t &kernel, bool openCL )
 		patch_memory = temp->generate_patch(old_memory);
 		g_checkpoint->store_global_mem(patch_memory, patch_fname, "%08x");
 		if(kernel.get_uid()%10 != 2 && kernel.get_uid() != 1){
-			int _del_result = remove(old_fname);
-			assert((_del_result==0) && "Error while deleting temp checkpoint file\n");
+//			int _del_result = remove(old_fname);
+//			assert((_del_result==0) && "Error while deleting temp checkpoint file\n");
 		}
       g_checkpoint->store_global_mem(g_the_gpu->get_global_memory(), f1name , "%08x");
 

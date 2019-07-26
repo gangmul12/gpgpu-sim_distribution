@@ -56,7 +56,10 @@ void checkpoint::load_global_mem(class memory_space *temp_mem, char * f1name)
 {
 
     FILE * fp2 = fopen(f1name, "r");
-    assert(fp2!=NULL);
+    if(fp2 == NULL){
+		printf("error while opening the file %s\n", f1name);
+		assert(fp2!=NULL);
+	}
       char line [ 128 ]; /* or other suitable maximum line size */
       unsigned int offset ;
       while ( fgets ( line, sizeof line, fp2 ) != NULL ) /* read a line */
