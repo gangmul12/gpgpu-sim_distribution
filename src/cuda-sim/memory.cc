@@ -161,13 +161,36 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::set_watch( addr_t addr, 
    m_watchpoints[watchpoint]=addr;
 }
 template<unsigned BSIZE> void memory_space_impl<BSIZE>::alloc(mem_addr_t addr, size_t length){
-	m_alloc[addr] = size;
+	assert(m_alloc.count(addr)==0 && "try to alloc pre-allocated region");
+	auto i = m_alloc.insert(std::make_pair(addr, length));
+	assert(++i = m_alloc.end() && "allocation should be the last part");
 }
 template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
 	assert(m_alloc.count(addr)!=0 && "try to free unallocated region");
 	size_t length = m_alloc[addr];
 	size_t ret = m_alloc.erase(addr);
 	auto i = m_free.insert(std::make_pair(addr, length));
+	if(i != m_free.begin()){
+		auto prev = std::prev(i);
+		long long int start = (long long int)(prev->first);
+		if(start + prev->second == (long long int)addr){
+			prev->second = prev->second + length;
+			m_free.erase(i);
+			i = prev;
+		}
+	}
+	auto next = std::next(i);
+	if(next != m_free.end()){
+		long long int start = (long long int)(i->first);
+		length = i->second;
+		if(start + length == (long long int)(next->first)){
+			i->second = length + next->second;
+			m_free.erase(next);
+		}
+	}
+
+	
+
 
 
 }
