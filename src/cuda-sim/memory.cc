@@ -183,6 +183,25 @@ template<unsigned BSIZE> class memory_space_impl<BSIZE>* memory_space_impl<BSIZE
 
 }
 
+template<unsigned BSIZE> bool memory_space_impl<BSIZE>::equals(const class memory_space_impl* other) const {
+	if(m_data.size() != other->m_data.size()){
+		return false;
+	}
+	typename map_t::const_iterator i_page;
+	for( i_page = m_data.begin(); i_page != m_data.end(); ++i_page){
+		if(other->m_data.count(i_page->first) > 0)
+			return false;
+		if( !(
+					(i_page->second).equals(  
+						other->m_data.find(i_page->first)->second  
+					)
+				) 
+			)
+			return false;
+	}
+	return true;
+}
+
 template class memory_space_impl<32>;
 template class memory_space_impl<64>;
 template class memory_space_impl<8192>;

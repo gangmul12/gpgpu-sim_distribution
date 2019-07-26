@@ -90,7 +90,7 @@ public:
       fprintf(fout, "\n");
       fflush(fout);
    }
-	bool equals(const mem_storage &another){
+	bool equals(const mem_storage &another) const {
 		return memcmp(m_data, another.m_data, BSIZE)==0;
 	}
 
@@ -124,7 +124,7 @@ public:
    
    virtual void set_watch( addr_t addr, unsigned watchpoint );
 	class memory_space_impl<BSIZE>* generate_patch(const class memory_space_impl* old);
-
+	bool equals(const class memory_space_impl* other) const;
 private:
    void read_single_block( mem_addr_t blk_idx, mem_addr_t addr, size_t length, void *data) const; 
    std::string m_name;
