@@ -273,6 +273,14 @@ param_list: /*empty*/
 param_entry: PARAM_DIRECTIVE { add_space_spec(param_space_unclassified,0); } variable_spec ptr_spec identifier_spec { add_function_arg(); }
 	| REG_DIRECTIVE { add_space_spec(reg_space,0); } variable_spec identifier_spec { add_function_arg(); }
 
+param_return:
+	| PARAM_DIRECTIVE { add_space_spec(param_space_unclassified,0); } scalar_type IDENTIFIER { add_directive(); }/* call from .callprototype*/
+	;
+
+param_input:
+	| PARAM_DIRECTIVE { add_space_spec(param_space_unclassified,0); } scalar_type IDENTIFIER { add_directive(); }/* call from .callprototype*/
+	;
+
 ptr_spec: /*empty*/
         | PTR_DIRECTIVE ptr_space_spec ptr_align_spec
         | PTR_DIRECTIVE ptr_align_spec
@@ -404,7 +412,9 @@ literal_list: literal_operand
 	| literal_list COMMA literal_operand;
 
 instruction_statement:  instruction SEMI_COLON
-	| IDENTIFIER COLON { add_label($1); }    
+	| instruction COMMA IDENTIFIER {  } SEMI_COLON /* .callprototype */
+	| IDENTIFIER COLON CALLPROTOTYPE_DIRECTIVE LEFT_PAREN param_return RIGHT_PAREN IDENTIFIER LEFT_PAREN param_input RIGHT_PAREN SEMI_COLON { add_label($1); }
+	| IDENTIFIER COLON { add_label($1); }   
 	| pred_spec instruction SEMI_COLON;
 
 instruction: opcode_spec LEFT_PAREN operand RIGHT_PAREN { set_return(); } COMMA operand COMMA LEFT_PAREN operand_list RIGHT_PAREN

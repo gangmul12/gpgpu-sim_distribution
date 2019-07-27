@@ -38,6 +38,8 @@ const class ptx_instruction *ptx_instruction_lookup( const char *filename, unsig
 #endif
 
 const char *decode_token( int type );
+
+void setSaveInsts( bool val );
 void read_parser_environment_variables();
 void start_function( int entry_point );
 void add_function_name( const char *fname );

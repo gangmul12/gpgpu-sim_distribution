@@ -71,9 +71,9 @@ unsigned cdp_latency[5];
 
 void ptx_opcocde_latency_options (option_parser_t opp) {
 	option_parser_register(opp, "-ptx_opcode_latency_int", OPT_CSTR, &opcode_latency_int,
-			"Opcode latencies for integers <ADD,MAX,MUL,MAD,DIV>"
-			"Default 1,1,19,25,145",
-			"1,1,19,25,145");
+			"Opcode latencies for integers <ADD,MAX,MUL,MAD,DIV,SHFL>"
+			"Default 1,1,19,25,145,32",
+			"1,1,19,25,145,32");
 	option_parser_register(opp, "-ptx_opcode_latency_fp", OPT_CSTR, &opcode_latency_fp,
 			"Opcode latencies for single precision floating points <ADD,MAX,MUL,MAD,DIV>"
 			"Default 1,1,1,1,30",
@@ -91,9 +91,9 @@ void ptx_opcocde_latency_options (option_parser_t opp) {
 			"Default 64",
 			"64");
 	option_parser_register(opp, "-ptx_opcode_initiation_int", OPT_CSTR, &opcode_initiation_int,
-			"Opcode initiation intervals for integers <ADD,MAX,MUL,MAD,DIV>"
-			"Default 1,1,4,4,32",
-			"1,1,4,4,32");
+			"Opcode initiation intervals for integers <ADD,MAX,MUL,MAD,DIV,SHFL>"
+			"Default 1,1,4,4,32,4",
+			"1,1,4,4,32,4");
 	option_parser_register(opp, "-ptx_opcode_initiation_fp", OPT_CSTR, &opcode_initiation_fp,
 			"Opcode initiation intervals for single precision floating points <ADD,MAX,MUL,MAD,DIV>"
 			"Default 1,1,1,1,5",
@@ -245,6 +245,11 @@ void function_info::ptx_assemble()
    unsigned num_inst = m_instructions.size();
    m_instr_mem_size = MAX_INST_SIZE*(num_inst+1);
    m_instr_mem = new ptx_instruction*[ m_instr_mem_size ];
+   
+
+   static long long int size_of_func_mem = 0;
+   size_of_func_mem += m_instr_mem_size;
+   printf("size of total func m_instr_mem : %d\n", size_of_func_mem);
 
    printf("GPGPU-Sim PTX: instruction assembly for function \'%s\'... ", m_name.c_str() );
    fflush(stdout);
@@ -648,12 +653,12 @@ void ptx_instruction::set_bar_type()
 
 void ptx_instruction::set_opcode_and_latency()
 {
-	unsigned int_latency[5];
+	unsigned int_latency[6];
 	unsigned fp_latency[5];
 	unsigned dp_latency[5];
 	unsigned sfu_latency;
 	unsigned tensor_latency;
-	unsigned int_init[5];
+	unsigned int_init[6];
 	unsigned fp_init[5];
 	unsigned dp_init[5];
 	unsigned sfu_init;
@@ -664,10 +669,11 @@ void ptx_instruction::set_opcode_and_latency()
 	 * [2] MUL
 	 * [3] MAD
 	 * [4] DIV
+	 * [5] SHFL
 	 */
-	sscanf(opcode_latency_int, "%u,%u,%u,%u,%u",
+	sscanf(opcode_latency_int, "%u,%u,%u,%u,%u,%u",
 			&int_latency[0],&int_latency[1],&int_latency[2],
-			&int_latency[3],&int_latency[4]);
+			&int_latency[3],&int_latency[4],&int_latency[5]);
 	sscanf(opcode_latency_fp, "%u,%u,%u,%u,%u",
 			&fp_latency[0],&fp_latency[1],&fp_latency[2],
 			&fp_latency[3],&fp_latency[4]);
@@ -678,9 +684,9 @@ void ptx_instruction::set_opcode_and_latency()
 			&sfu_latency);
 	sscanf(opcode_latency_tensor, "%u",
 			&tensor_latency);
-	sscanf(opcode_initiation_int, "%u,%u,%u,%u,%u",
+	sscanf(opcode_initiation_int, "%u,%u,%u,%u,%u,%u",
 			&int_init[0],&int_init[1],&int_init[2],
-			&int_init[3],&int_init[4]);
+			&int_init[3],&int_init[4],&int_init[5]);
 	sscanf(opcode_initiation_fp, "%u,%u,%u,%u,%u",
 			&fp_init[0],&fp_init[1],&fp_init[2],
 			&fp_init[3],&fp_init[4]);
@@ -873,8 +879,8 @@ void ptx_instruction::set_opcode_and_latency()
        op=TENSOR_CORE_OP;
 	   break;
    case SHFL_OP:
-	   latency = 32;
-	   initiation_interval = 4;
+	   latency = int_latency[5];
+	   initiation_interval = int_init[5];
 	   break;
    default: 
        break;
@@ -1840,8 +1846,8 @@ unsigned ptx_sim_init_thread( kernel_info_t &kernel,
       ptx_cta_lookup[sm_idx] = cta_info;
    } else {
       if ( g_debug_execution >= 1 ) {
-         printf("  <CTA realloc> : sm_idx=%u sid=%u max_cta_per_sm=%u\n", 
-                sm_idx, sid, max_cta_per_sm );
+   //      printf("  <CTA realloc> : sm_idx=%u sid=%u max_cta_per_sm=%u\n", 
+    //            sm_idx, sid, max_cta_per_sm );
       }
       shared_mem = shared_memory_lookup[sm_idx];
       sstarr_mem = sstarr_memory_lookup[sm_idx];
@@ -2272,6 +2278,9 @@ void functionalCoreSim::initializeCTA(unsigned ctaid_cp)
         if(cp_cta_resume==1)
             m_thread[i]->resume_reg_thread(fname,symtab);
         ctaLiveThreads++;
+    }
+	 if ( g_debug_execution >= 1 ) {
+         printf("  <CTA Init> : cta_idx=%u\n", ctaid_cp);
     }
 
     for(int k=0;k<m_warp_count;k++)

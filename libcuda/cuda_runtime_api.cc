@@ -1489,15 +1489,20 @@ __host__ cudaError_t CUDARTAPI cudaLaunch( const char *hostFun )
 			g_ptx_sim_mode?"functional simulation":"performance simulation", stream?stream->get_uid():0 );
 	kernel_info_t *grid = gpgpu_cuda_ptx_sim_init_grid(hostFun,config.get_args(),config.grid_dim(),config.block_dim(),context);
         //do dynamic PDOM analysis for performance simulation scenario
-	std::string kname = grid->name();
+	
 	function_info *kernel_func_info = grid->entry();
-	if (kernel_func_info->is_pdom_set()) {
+	std::string kname = std::string("no_impl");
+	if(kernel_func_info){
+	
+		kname = grid->name();
+		if (kernel_func_info->is_pdom_set()) {
     		printf("GPGPU-Sim PTX: PDOM analysis already done for %s \n", kname.c_str() );
     	} else {
     		printf("GPGPU-Sim PTX: finding reconvergence points for \'%s\'...\n", kname.c_str() );
-		kernel_func_info->do_pdom();
-		kernel_func_info->set_pdom();
-    	} 
+			kernel_func_info->do_pdom();
+			kernel_func_info->set_pdom();
+    	}
+	}
 	dim3 gridDim = config.grid_dim();
 	dim3 blockDim = config.block_dim();
 		
@@ -1507,7 +1512,7 @@ __host__ cudaError_t CUDARTAPI cudaLaunch( const char *hostFun )
 	class memory_space *global_mem;
 	global_mem = gpu->get_global_memory();
 
-	if(gpu->resume_option ==1 && (grid->get_uid()==gpu->resume_kernel))
+	if(gpu->resume_option ==1 && (grid->get_uid()==gpu->resume_kernel) && kernel_func_info)
 	{
 		
 	    char f1name[2048];
@@ -1517,12 +1522,13 @@ __host__ cudaError_t CUDARTAPI cudaLaunch( const char *hostFun )
 		for (int i=0;i<gpu->resume_CTA;i++)
 			grid->increment_cta_id();
 	}
-	if(gpu->resume_option==1 && (grid->get_uid()<gpu->resume_kernel))
+	if(gpu->resume_option==1 && (grid->get_uid()<gpu->resume_kernel) && kernel_func_info)
 	{
 		char f1name[2048];
 	    snprintf(f1name,2048,"checkpoint_files/global_mem_%d.txt", grid->get_uid());
 
-	    g_checkpoint->load_global_mem(global_mem, f1name);	
+	   if(grid->get_uid() == gpu->resume_kernel - 1 )
+			g_checkpoint->load_global_mem(global_mem, f1name);	
 		printf("Skipping kernel %d as resuming from kernel %d\n",grid->get_uid(),gpu->resume_kernel );
 		g_cuda_launch_stack.pop_back();
 		return g_last_cudaError = cudaSuccess;
@@ -1534,6 +1540,11 @@ __host__ cudaError_t CUDARTAPI cudaLaunch( const char *hostFun )
 		g_cuda_launch_stack.pop_back();
 		return g_last_cudaError = cudaSuccess;
 		
+	}
+	if(kernel_func_info == NULL){
+		printf("Skipping kernel %d as no PTX impl found\n", grid->get_uid());
+		g_cuda_launch_stack.pop_back();
+		return g_last_cudaError = cudaSuccess;
 	}
 	printf("GPGPU-Sim PTX: pushing kernel \'%s\' to stream %u, gridDim= (%u,%u,%u) blockDim = (%u,%u,%u) \n",
 			kname.c_str(), stream?stream->get_uid():0, gridDim.x,gridDim.y,gridDim.z,blockDim.x,blockDim.y,blockDim.z );
@@ -1696,6 +1707,7 @@ __host__ cudaError_t CUDARTAPI cudaEventRecord(cudaEvent_t event, cudaStream_t s
 	if( !e ) return g_last_cudaError = cudaErrorUnknown;
 	struct CUstream_st *s = (struct CUstream_st *)stream;
 	stream_operation op(e,s);
+	e->issue();
 	g_stream_manager->push(op);
 	return g_last_cudaError = cudaSuccess;
 }
@@ -1708,9 +1720,13 @@ __host__ cudaError_t CUDARTAPI cudaStreamWaitEvent(cudaStream_t stream, cudaEven
    //reference: https://www.cs.cmu.edu/afs/cs/academic/class/15668-s11/www/cuda-doc/html/group__CUDART__STREAM_gfe68d207dc965685d92d3f03d77b0876.html 
 	CUevent_st *e = get_event(event);
 	if( !e ){
-	   printf("GPGPU-Sim API: Warning: cudaEventRecord has not been called on event before calling cudaStreamWaitEvent.\nNothing to be done.\n");
-      return g_last_cudaError = cudaSuccess;
+	   printf("GPGPU-Sim API: Error at cudaStreamWaitEvent. Event is not created .\n");
+		return g_last_cudaError = cudaErrorInvalidResourceHandle;
    }
+	else if(e->num_issued() == 0){
+		printf("GPGPU-Sim API: Warning: cudaEventRecord has not been called on event before calling cudaStreamWaitEvent.\nNothing to be done.\n");
+      return g_last_cudaError = cudaSuccess;
+	}
    if (!stream){
       g_stream_manager->pushCudaStreamWaitEventToAllStreams(e, flags);
    } else {
@@ -2070,7 +2086,9 @@ void extract_ptx_files_using_cuobjdump(){
             const char *ptx_file = line.c_str();
             printf("Extracting specific PTX file named %s \n",ptx_file);
             snprintf(command,1000,"$CUDA_INSTALL_PATH/bin/cuobjdump -xptx %s %s", ptx_file, app_binary.c_str());
-            if (system(command)!=0) {
+				std::ifstream f(ptx_file);
+				if(f.good()){}
+				else if (system(command)!=0) {
                 printf("ERROR: command: %s failed \n",command);
                 exit(0);
             }
@@ -3367,16 +3385,16 @@ kernel_info_t *gpgpu_cuda_ptx_sim_init_grid( const char *hostFun,
 	kernel_info_t *result = new kernel_info_t(gridDim,blockDim,entry,gpu->getNameArrayMapping(),gpu->getNameInfoMapping());
 	if( entry == NULL ) {
 		printf("GPGPU-Sim PTX: ERROR launching kernel -- no PTX implementation found for %p\n", hostFun);
-		abort();
+//		abort();
 	}
 	unsigned argcount=args.size();
 	unsigned argn=1;
 	for( gpgpu_ptx_sim_arg_list_t::iterator a = args.begin(); a != args.end(); a++ ) {
-		entry->add_param_data(argcount-argn,&(*a));
+		if(entry) entry->add_param_data(argcount-argn,&(*a));
 		argn++;
 	}
-
-	entry->finalize(result->get_param_memory());
+	if(entry != NULL){
+	entry->finalize(result->get_param_memory());}
 	g_ptx_kernel_count++;
 	fflush(stdout);
 	

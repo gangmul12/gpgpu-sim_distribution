@@ -346,6 +346,8 @@ public:
    symbol_table* start_inst_group();
    symbol_table* end_inst_group();
 
+   long long int size_of_total_symbol = 0;
+   long long int num_of_symbol = 0;
 private:
    unsigned m_reg_allocator;
    unsigned m_shared_next;
@@ -1229,6 +1231,10 @@ private:
 class function_info {
 public:
    function_info(int entry_point );
+   ~function_info()
+   {
+	  delete [] m_instr_mem;
+   }
    const ptx_version &get_ptx_version() const { return m_symtab->get_ptx_version(); }
    unsigned get_sm_target() const { return m_symtab->get_sm_target(); }
    bool is_extern() const { return m_extern; }
@@ -1399,6 +1405,9 @@ public:
    void set_maxnt_id(unsigned maxthreads) { maxnt_id = maxthreads;}
    unsigned get_maxnt_id() { return maxnt_id;}
 
+   // no inst flag
+   bool m_no_inst;
+   std::string m_filename;
 private:
    unsigned maxnt_id;
    unsigned m_uid;

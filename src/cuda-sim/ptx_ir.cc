@@ -151,6 +151,8 @@ symbol *symbol_table::add_variable( const char *identifier, const type_info *typ
    snprintf(buf,1024,"%s:%u",filename,line);
    symbol *s = new symbol(identifier,type,buf,size);
    m_symbols[ key ] = s;
+   num_of_symbol++;
+   size_of_total_symbol += sizeof(s);
 
    if ( type != NULL && type->get_key().is_global()  ) {
       m_globals.push_back(s);
@@ -172,7 +174,13 @@ void symbol_table::add_function( function_info *func, const char *filename, unsi
    type_info *type = add_type( func );
    symbol *s = new symbol(func->get_name().c_str(),type,buf,0);
    s->set_function(func);
+   //contain filename into function_info
+	printf("filename : %s\n",filename);
+   func->m_filename = std::string(filename);
    m_symbols[ func->get_name() ] = s;
+
+   num_of_symbol++;
+   size_of_total_symbol += sizeof(*s);
 }
 
 //Jin: handle instruction group for cdp
@@ -588,6 +596,17 @@ bool function_info::connect_break_targets() //connecting break instructions with
 }
 void function_info::do_pdom() 
 {
+
+   // Parsing first
+	printf("do_pdom : m_no_inst = %d\n", m_no_inst);
+	printf("m_filename = %s\n", m_filename.c_str());
+   if(m_no_inst)
+   {
+	  setSaveInsts(true);
+	  init_parser(m_filename.c_str());
+	  m_no_inst = false;
+   }
+   
    create_basic_blocks();
    connect_basic_blocks();
    bool modified = false; 
@@ -1323,8 +1342,11 @@ ptx_instruction::ptx_instruction( int opcode,
 
    if (opcode == CALL_OP) {
        const operand_info &target  = func_addr();
-       assert( target.is_function_address() );
-       const symbol *func_addr = target.get_symbol();
+       // EDIT_42
+	   // commentized on assert below.
+	   //assert( target.is_function_address() );
+       if(target.is_function_address()) {
+	   const symbol *func_addr = target.get_symbol();
        const function_info *target_func = func_addr->get_pc();
        std::string fname = target_func->get_name();
 
@@ -1337,6 +1359,7 @@ ptx_instruction::ptx_instruction( int opcode,
            m_is_cdp = 2;
        if(fname == "cudaLaunchDeviceV2")
            m_is_cdp = 4;
+	   }
 
    }
 }
