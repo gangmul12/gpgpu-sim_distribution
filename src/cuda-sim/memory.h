@@ -130,7 +130,7 @@ private:
    unsigned m_log2_block_size;
    typedef mem_map<mem_addr_t,mem_storage<BSIZE> > map_t;
    map_t m_data;
-	typedef mem_map<mem_addr_t,size_t> mem_meta_t;
+	typedef std::map<mem_addr_t,size_t> mem_meta_t;
    mem_meta_t m_alloc;
 	mem_meta_t m_free;
 	std::map<unsigned,mem_addr_t> m_watchpoints;
