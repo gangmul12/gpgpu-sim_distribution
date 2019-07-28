@@ -1555,13 +1555,13 @@ __host__ cudaError_t CUDARTAPI cudaLaunch( const char *hostFun )
 
 		g_checkpoint->load_global_mem(global_mem, f1name);
 		//@TODO delete this
-		class memory_space_impl<8192>* reference = new memory_space_impl<8192>("global",64*1024);
-		snprintf(f1name, 2048,"checkpoint_files/original/global_mem_%d.txt", grid->get_uid());
-		g_checkpoint -> load_global_mem(reference, f1name);
-		extern gpgpu_sim* g_the_gpu;
-		class memory_space_impl<8192>* temp = dynamic_cast<memory_space_impl<8192>*>(g_the_gpu->get_global_memory());
-		assert(temp->equals(reference));
-		delete reference;
+		//class memory_space_impl<8192>* reference = new memory_space_impl<8192>("global",64*1024);
+		//snprintf(f1name, 2048,"checkpoint_files/original/global_mem_%d.txt", grid->get_uid());
+		//g_checkpoint -> load_global_mem(reference, f1name);
+		//extern gpgpu_sim* g_the_gpu;
+		//class memory_space_impl<8192>* temp = dynamic_cast<memory_space_impl<8192>*>(g_the_gpu->get_global_memory());
+		//assert(temp->equals(reference));
+		//delete reference;
 
 		printf("Skipping kernel %d as resuming from kernel %d\n",grid->get_uid(),gpu->resume_kernel );
 		g_cuda_launch_stack.pop_back();
