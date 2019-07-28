@@ -422,8 +422,11 @@ void* gpgpu_t::gpu_malloc( size_t size )
       printf("GPGPU-Sim PTX: allocating %zu bytes on GPU starting at address 0x%Lx\n", size, m_dev_malloc );
       fflush(stdout);
    }
-   m_dev_malloc += size;
-   if (size%256) m_dev_malloc += (256 - size%256); //align to 256 byte boundaries
+	m_dev_malloc += size;
+   if (size%256) {
+		m_dev_malloc += (256 - size%256); //align to 256 byte boundaries
+	}
+	m_global_mem->alloc(result, m_dev_malloc - result);
    return(void*) result;
 }
 
@@ -436,9 +439,13 @@ void* gpgpu_t::gpu_mallocarray( size_t size )
    }
    m_dev_malloc += size;
    if (size%256) m_dev_malloc += (256 - size%256); //align to 256 byte boundaries
-   return(void*) result;
+	m_global_mem->alloc(result, m_dev_malloc - result);
+	return(void*) result;
 }
 
+void gpgpu_t::gpu_free(void* devPtr){
+	m_global_mem->free((mem_addr_t)devPtr);
+}
 
 void gpgpu_t::memcpy_to_gpu( size_t dst_start_addr, const void *src, size_t count )
 {

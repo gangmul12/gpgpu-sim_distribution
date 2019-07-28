@@ -162,14 +162,32 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::set_watch( addr_t addr, 
    m_watchpoints[watchpoint]=addr;
 }
 template<unsigned BSIZE> void memory_space_impl<BSIZE>::alloc(mem_addr_t addr, size_t length){
+	if(length==0){
+		if(m_zero_size_alloc.count(addr))
+			m_zero_size_alloc[addr] = m_zero_size_alloc[addr]+1;
+		else
+			m_zero_size_alloc.insert(std::make_pair(addr,1 ));
+		return;
+	}
+	printf("CUDAFREE TEST : alloc %llx, size = %u\n", addr, length);
 	assert(m_alloc.count(addr)==0 && "try to alloc pre-allocated region");
 	auto i = m_alloc.insert(std::make_pair(addr, length));
 	assert(i.second==true);
 	assert(++(i.first) == m_alloc.end() && "allocation should be the last part");
 }
 template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
+	printf("CUDAFREE TEST : free %llx,", addr);
+	if(m_zero_size_alloc.count(addr)){
+		m_zero_size_alloc[addr] = m_zero_size_alloc[addr]-1;
+		if(m_zero_size_alloc[addr]==0){
+			m_zero_size_alloc.erase(addr);
+		}
+		printf(" size = 0\n");
+		return;
+	}
 	assert(m_alloc.count(addr)!=0 && "try to free unallocated region");
 	size_t length = m_alloc[addr];
+	printf(" size = %u,", length);
 	size_t ret = m_alloc.erase(addr);
 	mem_meta_t::iterator i = m_free.insert(std::make_pair(addr, length)).first;
 	if(i != m_free.begin()){
@@ -177,8 +195,13 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
 		long long int start = (long long int)(prev->first);
 		if(start + prev->second == (long long int)addr){
 			prev->second = prev->second + length;
+			printf("merge with %llx, new size = %u,", start, prev->second);
 			m_free.erase(i);
 			i = prev;
+		}
+		else if(start+prev->second > addr){
+			printf("prev addr %u + prev size %u = %u > this addr %u\n", start, prev->second, start+prev->second , addr);
+			assert(false && "strange address range..");
 		}
 	}
 	mem_meta_t::iterator next = std::next(i);
@@ -187,9 +210,37 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
 		length = i->second;
 		if(start + length == (long long int)(next->first)){
 			i->second = length + next->second;
+			printf(" merge with %llx, new size = %u\n",next->first, i->second);
 			m_free.erase(next);
 		}
+		else if(start + length > next->first){
+			printf("this addr %u + this length %u = %u > next addr %u\n", start, length, start+length , next->first);
+			assert(false && "strange address range..");
+		}
 	}
+	
+	unsigned stat=0;
+
+	mem_addr_t index_start = i->first >> m_log2_block_size;
+	mem_addr_t index_end = (i->first + i->second) >> m_log2_block_size;
+	for( mem_addr_t index = index_start + 1; index < index_end ; index++){
+		stat += m_data.erase(index);
+	}
+	if(index_start != index_end){
+		mem_addr_t last_addr = i->first + i->second;
+		mem_addr_t new_start_addr = index_end<<m_log2_block_size;
+		i->second = ((index_start+1) << m_log2_block_size) - (i->first);
+		if(i->second == BSIZE){
+			stat += m_data.erase(i->first>>m_log2_block_size);
+			m_free.erase(i);
+		}
+		if(last_addr != new_start_addr){
+			m_free.insert(std::make_pair(new_start_addr, last_addr-new_start_addr));
+			printf(" insert (%llx, %u), ", new_start_addr, last_addr-new_start_addr);
+		}
+	}
+	printf(" num left : %d %d", m_alloc.size(), m_zero_size_alloc.size());
+	printf(" free datablock %u\n", stat);
 
 	
 

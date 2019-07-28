@@ -132,6 +132,7 @@ private:
    map_t m_data;
 	typedef std::map<mem_addr_t,size_t> mem_meta_t;
    mem_meta_t m_alloc;
+	mem_map<mem_addr_t, size_t> m_zero_size_alloc;
 	mem_meta_t m_free;
 	std::map<unsigned,mem_addr_t> m_watchpoints;
 
