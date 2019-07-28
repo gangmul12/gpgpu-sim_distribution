@@ -169,14 +169,12 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::alloc(mem_addr_t addr, s
 			m_zero_size_alloc.insert(std::make_pair(addr,1 ));
 		return;
 	}
-	printf("CUDAFREE TEST : alloc %llx, size = %u\n", addr, length);
 	assert(m_alloc.count(addr)==0 && "try to alloc pre-allocated region");
 	auto i = m_alloc.insert(std::make_pair(addr, length));
 	assert(i.second==true);
 	assert(++(i.first) == m_alloc.end() && "allocation should be the last part");
 }
 template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
-	printf("CUDAFREE TEST : free %llx,", addr);
 	if(m_zero_size_alloc.count(addr)){
 		m_zero_size_alloc[addr] = m_zero_size_alloc[addr]-1;
 		if(m_zero_size_alloc[addr]==0){
@@ -187,7 +185,6 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
 	}
 	assert(m_alloc.count(addr)!=0 && "try to free unallocated region");
 	size_t length = m_alloc[addr];
-	printf(" size = %u,", length);
 	size_t ret = m_alloc.erase(addr);
 	mem_meta_t::iterator i = m_free.insert(std::make_pair(addr, length)).first;
 	if(i != m_free.begin()){
@@ -195,7 +192,6 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
 		long long int start = (long long int)(prev->first);
 		if(start + prev->second == (long long int)addr){
 			prev->second = prev->second + length;
-			printf("merge with %llx, new size = %u,", start, prev->second);
 			m_free.erase(i);
 			i = prev;
 		}
@@ -210,7 +206,6 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
 		length = i->second;
 		if(start + length == (long long int)(next->first)){
 			i->second = length + next->second;
-			printf(" merge with %llx, new size = %u\n",next->first, i->second);
 			m_free.erase(next);
 		}
 		else if(start + length > next->first){
@@ -236,16 +231,8 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
 		}
 		if(last_addr != new_start_addr){
 			m_free.insert(std::make_pair(new_start_addr, last_addr-new_start_addr));
-			printf(" insert (%llx, %u), ", new_start_addr, last_addr-new_start_addr);
 		}
 	}
-	printf(" num left : %d %d", m_alloc.size(), m_zero_size_alloc.size());
-	printf(" free datablock %u\n", stat);
-
-	
-
-
-
 }
 template class memory_space_impl<32>;
 template class memory_space_impl<64>;
