@@ -161,6 +161,50 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::set_watch( addr_t addr, 
    m_watchpoints[watchpoint]=addr;
 }
 
+template<unsigned BSIZE> class memory_space_impl<BSIZE>* memory_space_impl<BSIZE>::generate_patch(const class memory_space_impl* old)
+{
+	class memory_space_impl* result = new memory_space_impl<BSIZE>(m_name,64*1024);
+	typename map_t::const_iterator i_page;
+
+   for ( i_page = m_data.begin(); i_page != m_data.end(); ++i_page) {
+		if(old->m_data.count(i_page->first)){
+			class mem_storage<BSIZE> new_mem = i_page->second;
+			class mem_storage<BSIZE> old_mem = old->m_data.find(i_page->first)->second;
+			if(!new_mem.equals(old_mem)){
+				result->m_data.insert(std::make_pair(i_page->first, i_page->second));
+			}
+		}
+		else{
+			mem_storage<BSIZE> temp_storage(i_page->second);
+			result->m_data.insert(std::make_pair(i_page->first, temp_storage));
+		}
+   }
+	return result;
+
+}
+
+template<unsigned BSIZE> bool memory_space_impl<BSIZE>::equals(const class memory_space_impl* other) const {
+	if(m_data.size() != other->m_data.size()){
+		printf("Info : two size are different %d %d\n", m_data.size(), other->m_data.size());
+		return false;
+	}
+	typename map_t::const_iterator i_page;
+	for( i_page = m_data.begin(); i_page != m_data.end(); ++i_page){
+		if(other->m_data.count(i_page->first) == 0){
+			printf("Info : other doenst have block");
+			i_page->second.print("%x",stderr);
+			return false;
+		}
+		if( !(	(i_page->second).equals( other->m_data.find(i_page->first)->second )	) ){
+			printf("Info : memory block is existed, but not equal at %x\n", i_page->first);
+			i_page->second.print("%x", stderr);
+			other->m_data.find(i_page->first)->second.print("%x", stderr);
+			return false;
+		}
+	}
+	return true;
+}
+
 template class memory_space_impl<32>;
 template class memory_space_impl<64>;
 template class memory_space_impl<8192>;

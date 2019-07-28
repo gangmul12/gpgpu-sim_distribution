@@ -1181,6 +1181,7 @@ public:
 
     void load_global_mem(class memory_space *temp_mem, char * f1name);
     void store_global_mem(class memory_space *mem, char * fname , char * format);
+//	 class memory_space* generate_patch(class memory_space_impl* new_mem, class memory_space_impl* old_mem);
     unsigned radnom;
 
 

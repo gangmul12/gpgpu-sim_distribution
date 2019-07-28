@@ -56,7 +56,10 @@ void checkpoint::load_global_mem(class memory_space *temp_mem, char * f1name)
 {
 
     FILE * fp2 = fopen(f1name, "r");
-    assert(fp2!=NULL);
+    if(fp2 == NULL){
+		printf("error while opening the file %s\n", f1name);
+		assert(fp2!=NULL);
+	}
       char line [ 128 ]; /* or other suitable maximum line size */
       unsigned int offset ;
       while ( fgets ( line, sizeof line, fp2 ) != NULL ) /* read a line */
@@ -96,7 +99,11 @@ void checkpoint::store_global_mem(class memory_space * mem, char *fname, char * 
       mem->print(format,fp3);
       fclose(fp3);
 }
-
+/*
+class memory_space* checkpoint::generate_patch(class memory_space_impl* new_memory, class memory_space_impl* old_memory){
+	 return new_memory->generate_patch(old_memory);	
+}
+*/
 void move_warp( warp_inst_t *&dst, warp_inst_t *&src )
 {
    assert( dst->empty() );
