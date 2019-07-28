@@ -123,13 +123,17 @@ public:
    virtual void write_only( mem_addr_t index, mem_addr_t offset, size_t length, const void *data);
    virtual void read( mem_addr_t addr, size_t length, void *data ) const;
    virtual void print( const char *format, FILE *fout ) const;
+<<<<<<< HEAD
    
    virtual void set_watch( addr_t addr, unsigned watchpoint );
 	class memory_space_impl<BSIZE>* generate_patch(const class memory_space_impl* old);
 	bool equals(const class memory_space_impl* other) const;
-virtual void alloc(mem_addr_t addr, size_t length);
+=======
+   virtual void set_watch( addr_t addr, unsigned watchpoint );
+	virtual void alloc(mem_addr_t addr, size_t length);
 	virtual void free(mem_addr_t);
 
+>>>>>>> cudaFree
 private:
    void read_single_block( mem_addr_t blk_idx, mem_addr_t addr, size_t length, void *data) const; 
    std::string m_name;

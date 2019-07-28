@@ -579,6 +579,11 @@ __host__ cudaError_t CUDARTAPI cudaFree(void *devPtr)
 	if(g_debug_execution >= 3){
 	    announce_call(__my_func__);
     }
+	if(devPtr==NULL){
+		return g_last_cudaError = cudaSuccess;
+	}
+	CUctx_st* context = GPGPUSim_Context();
+	context->get_device()->get_gpgpu()->gpu_free(devPtr);
 	// TODO...  manage g_global_mem space?
 	return g_last_cudaError = cudaSuccess;
 }
