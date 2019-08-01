@@ -1575,7 +1575,7 @@ __host__ cudaError_t CUDARTAPI cudaLaunch( const char *hostFun )
 		return g_last_cudaError = cudaSuccess;
 		
 	}
-	if(kernel_func_info == NULL){
+	if(kernel_func_info == NULL || kname.find("TopK")!=std::string::npos){
 		printf("Skipping kernel %d as no PTX impl found\n", grid->get_uid());
 		g_cuda_launch_stack.pop_back();
 		return g_last_cudaError = cudaSuccess;
