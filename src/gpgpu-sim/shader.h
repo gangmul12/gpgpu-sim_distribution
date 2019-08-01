@@ -101,7 +101,9 @@ public:
     {
         m_stores_outstanding=0;
         m_inst_in_pipeline=0;
-        reset(); 
+	m_demand_load_outstanding=0;
+	m_prefetch_load_outstanding=0;
+	reset(); 
     }
     void reset()
     {
@@ -121,6 +123,7 @@ public:
         //Jin: cdp support
         m_cdp_latency = 0;
         m_cdp_dummy = false;
+	m_num_issued = 0;
     }
     void init( address_type start_pc,
                unsigned cta_id,
@@ -141,6 +144,7 @@ public:
         //Jin: cdp support
         m_cdp_latency = 0;
         m_cdp_dummy = false;
+        m_num_issued = 0;
     }
 
     bool functional_done() const;
@@ -219,6 +223,22 @@ public:
         assert( m_stores_outstanding > 0 );
         m_stores_outstanding--;
     }
+    void inc_demand_load_req() { m_demand_load_outstanding++; }
+    void dec_demand_load_req() {
+	assert( m_demand_load_outstanding > 0 );
+        if(m_demand_load_outstanding > 0){
+		m_demand_load_outstanding--;
+	}
+    }
+    void inc_prefetch_load_req() { m_prefetch_load_outstanding++; }
+    void dec_prefetch_load_req() {
+	assert( m_prefetch_load_outstanding > 0 );
+	if(m_prefetch_load_outstanding > 0){
+		m_prefetch_load_outstanding--;
+	}
+}
+    unsigned number_outstanding_demand_load() const { return m_demand_load_outstanding; }
+    unsigned number_outstanding_prefetch_load() const { return m_prefetch_load_outstanding; }
 
     unsigned num_inst_in_buffer() const
     {
@@ -243,7 +263,8 @@ public:
 
     unsigned get_dynamic_warp_id() const { return m_dynamic_warp_id; }
     unsigned get_warp_id() const { return m_warp_id; }
-
+    void increment_num_issued(unsigned num_issued){ m_num_issued += num_issued; }
+    unsigned get_num_issued() const {return m_num_issued;}
 private:
     static const unsigned IBUFFER_SIZE=2;
     class shader_core_ctx *m_shader;
@@ -277,6 +298,10 @@ private:
 
     unsigned m_stores_outstanding; // number of store requests sent but not yet acknowledged
     unsigned m_inst_in_pipeline;
+
+    unsigned m_num_issued;
+    unsigned m_demand_load_outstanding;
+    unsigned m_prefetch_load_outstanding;
 
     //Jin: cdp support
 public:
@@ -416,6 +441,7 @@ protected:
     register_set* m_mem_out;
 
     int m_id;
+    unsigned m_num_issued;
 };
 
 class lrr_scheduler : public scheduler_unit {
@@ -1259,6 +1285,28 @@ public:
     void get_L1C_sub_stats(struct cache_sub_stats &css) const;
     void get_L1T_sub_stats(struct cache_sub_stats &css) const;
 
+    // check if data is already in cache and send prefetch request to icnt
+    void process_prefetch_queue( data_cache *cache);
+    void process_prefetch_cache_access(data_cache* cache, new_addr_type address, std::list<cache_event>& events, mem_fetch* mf, cache_request_status status);
+    // this function manages all process of prefetching
+    void process_prefetch_total(data_cache *cache, const warp_inst_t &inst, bool is_empty_or_notload);
+    Prefetch_Unit* get_prefetcher() {return m_prefetcher;}
+    // select between inst_request & prefetch_request
+    void set_mux_inst_request(){
+        mux_select_request = true;
+    }
+    void set_mux_prefetch_request(){
+        mux_select_request = false;
+    }
+    
+    std::vector<unsigned> get_dist_coll();
+    unsigned get_min_dist();
+    unsigned get_max_dist();
+    unsigned get_dist_size();
+
+
+
+
 protected:
     ldst_unit( mem_fetch_interface *icnt,
                shader_core_mem_fetch_allocator *mf_allocator,
@@ -1312,6 +1360,14 @@ protected:
    opndcoll_rfu_t *m_operand_collector;
    Scoreboard *m_scoreboard;
 
+   Prefetch_Unit *m_prefetcher;
+   std::map<new_addr_type /*addr*/, unsigned /*time stamp*/> m_prefetch_map;
+
+   // if mux_core_request is true, core request will access cache
+   // otherwise, prefetch request will access cache
+   bool mux_select_request;
+
+
    mem_fetch *m_next_global;
    warp_inst_t m_next_wb;
    unsigned m_writeback_arb; // round-robin arbiter for writeback contention between L1T, L1C, shared
@@ -1327,6 +1383,10 @@ protected:
 
    std::deque<mem_fetch* > l1_latency_queue;
    void L1_latency_queue_cycle();
+
+
+    bool m_shader_cache_dump_trace;
+
 };
 
 enum pipeline_stage_name_t {
@@ -1497,7 +1557,10 @@ struct shader_core_config : public core_config
     bool gpgpu_local_mem_map;
     bool gpgpu_ignore_resources_limitation;
     bool sub_core_model;
-    
+
+    bool shader_cache_dump_trace;
+    bool shader_dump_pipeline;
+
     unsigned max_sp_latency;
     unsigned max_int_latency;
     unsigned max_sfu_latency;
@@ -1512,6 +1575,18 @@ struct shader_core_config : public core_config
     int simt_core_sim_order; 
     
     unsigned smem_latency;
+
+    unsigned m_L1Prefetcher_type_config;   
+    unsigned m_L1Prefetcher_check_row_change_config;  
+    unsigned m_L1Prefetcher_nextline_config;
+    unsigned m_L1Prefetcher_cta_x_dim_config;
+    unsigned m_L1Prefetcher_cta_y_dim_config;
+
+    unsigned m_L1Prefetcher_img_x_size_config;
+    unsigned m_L1Prefetcher_img_y_size_config;
+    unsigned m_L1Prefetcher_img_z_size_config;
+
+    unsigned m_prefetcher_direction;
 
     unsigned mem2device(unsigned memid) const { return memid + n_simt_clusters; }
 
@@ -1604,6 +1679,15 @@ struct shader_core_stats_pod {
     unsigned *gpgpu_n_shmem_bank_access;
     long *n_simt_to_mem; // Interconnect power stats
     long *n_mem_to_simt;
+
+
+    int n_issued_prefetch_req; // # of rq which moved into calpre_q to pre2icnt_q
+    int n_prefetch_hit;
+    int n_prefetch_access;
+    float prefetch_accuracy; // n_prefetch_hit/n_prefetch_access
+    int n_early_evict;
+    int n_late_prefetch;
+
 };
 
 class shader_core_stats : public shader_core_stats_pod {
@@ -1701,6 +1785,14 @@ public:
         return m_shader_warp_slot_issue_distro;
     }
 
+
+    l1_cache * l1d_in_stat;
+
+    void set_l1d_pointer(l1_cache* pp){
+        l1d_in_stat=pp;
+    }
+
+
 private:
     const shader_core_config *m_config;
 
@@ -1742,7 +1834,19 @@ public:
     				       m_memory_config );
     	return mf;
     }
-    
+    mem_fetch *alloc( new_addr_type addr, mem_access_type type, unsigned size, bool wr, unsigned cta_id, unsigned warp_id ) const 
+    {
+        mem_access_t access( type, addr, size, wr );
+        mem_fetch *mf = new mem_fetch( access, 
+                           NULL,
+                           wr?WRITE_PACKET_SIZE:READ_PACKET_SIZE, 
+                           warp_id, 
+                           m_core_id, 
+                           m_cluster_id,
+                           m_memory_config );
+        mf->set_mf_cta_id(cta_id);
+        return mf;
+    }
     mem_fetch *alloc( const warp_inst_t &inst, const mem_access_t &access ) const
     {
         warp_inst_t inst_copy = inst;
@@ -1816,8 +1920,35 @@ public:
     void mem_instruction_stats(const warp_inst_t &inst);
     void decrement_atomic_count( unsigned wid, unsigned n );
     void inc_store_req( unsigned warp_id) { m_warp[warp_id].inc_store_req(); }
+
+    void inc_demand_load_req( unsigned warp_id) { m_warp[warp_id].inc_demand_load_req();}
+    void inc_prefetch_load_req( unsigned warp_id) { m_warp[warp_id].inc_prefetch_load_req(); }
+
+    // iterate over all warp and accumulate number of total outstanding demand / prefetch load request
+    unsigned number_outstanding_demand_load() {
+        unsigned total_core_demand_load_outstanding = 0;
+        for(int i = 0; i<m_warp.size(); i++){
+            total_core_demand_load_outstanding += m_warp[i].number_outstanding_demand_load();
+        }
+        return total_core_demand_load_outstanding;
+    }
+    unsigned number_outstanding_prefetch_load() {
+        unsigned total_core_prefetch_load_outstanding = 0;
+        for(int i = 0; i<m_warp.size(); i++){
+            total_core_prefetch_load_outstanding += m_warp[i].number_outstanding_prefetch_load();
+        }
+        return total_core_prefetch_load_outstanding;
+    }
+
+
     void dec_inst_in_pipeline( unsigned warp_id ) { m_warp[warp_id].dec_inst_in_pipeline(); } // also used in writeback()
     void store_ack( class mem_fetch *mf );
+
+
+    void dec_prefetch_load_ack( class mem_fetch *mf );
+    void dec_demand_load_ack( class mem_fetch *mf );
+
+
     bool warp_waiting_at_mem_barrier( unsigned warp_id );
     void set_max_cta( const kernel_info_t &kernel );
     void warp_inst_complete(const warp_inst_t &inst);
@@ -1943,6 +2074,14 @@ public:
 	 void inc_simt_to_mem(unsigned n_flits){ m_stats->n_simt_to_mem[m_sid] += n_flits; }
 	 bool check_if_non_released_reduction_barrier(warp_inst_t &inst);
 
+
+	 std::vector<unsigned> get_dist_coll();
+	 unsigned get_min_dist();
+	 unsigned get_max_dist();
+	 unsigned get_dist_size();
+
+
+
 	private:
 	 unsigned inactive_lanes_accesses_sfu(unsigned active_count,double latency){
       return  ( ((32-active_count)>>1)*latency) + ( ((32-active_count)>>3)*latency) + ( ((32-active_count)>>3)*latency);
@@ -1981,6 +2120,8 @@ public:
     void print_stage(unsigned int stage, FILE *fout) const;
     unsigned long long m_last_inst_gpu_sim_cycle;
     unsigned long long m_last_inst_gpu_tot_sim_cycle;
+
+    bool m_shader_dump_pipeline;
 
     // general information
     unsigned m_sid; // shader id
@@ -2042,6 +2183,12 @@ public:
     // is that the dynamic_warp_id is a running number unique to every warp
     // run on this shader, where the warp_id is the static warp slot.
     unsigned m_dynamic_warp_id;
+
+
+    unsigned m_core_demand_load_outstanding;
+    unsigned m_core_prefetch_load_outstanding;
+
+
 
     //Jin: concurrent kernels on a sm
 public:
@@ -2107,6 +2254,12 @@ public:
 
     void get_icnt_stats(long &n_simt_to_mem, long &n_mem_to_simt) const;
     float get_current_occupancy( unsigned long long& active, unsigned long long & total ) const;
+
+    std::vector<unsigned> get_dist_coll();
+    unsigned get_max_dist();
+    unsigned get_min_dist();
+    unsigned get_dist_size();
+
 
 private:
     unsigned m_cluster_id;

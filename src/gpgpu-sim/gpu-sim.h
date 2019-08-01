@@ -67,7 +67,9 @@ extern tr1_hash_map<new_addr_type,unsigned> address_random_interleaving;
 
 enum dram_ctrl_t {
    DRAM_FIFO=0,
-   DRAM_FRFCFS=1
+   DRAM_FRFCFS=1,
+   DRAM_APPROX=2
+
 };
 
 
@@ -233,6 +235,7 @@ struct memory_config {
    bool l2_ideal;
    unsigned gpgpu_frfcfs_dram_sched_queue_size;
    unsigned gpgpu_dram_return_queue_size;
+   unsigned gpgpu_approx_dram_precision;
    enum dram_ctrl_t scheduler_type;
    bool gpgpu_memlatency_stat;
    unsigned m_n_mem;
@@ -290,6 +293,8 @@ struct memory_config {
    unsigned write_high_watermark;
    unsigned write_low_watermark;
    bool m_perf_sim_memcpy;
+   bool dram_dump_trace;
+
 };
 
 // global counters and flags (please try not to add to this list!!!)

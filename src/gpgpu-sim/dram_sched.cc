@@ -30,7 +30,7 @@
 #include "gpu-sim.h"
 #include "../abstract_hardware_model.h"
 #include "mem_latency_stat.h"
-
+#include "stat-tool.h"
 frfcfs_scheduler::frfcfs_scheduler( const memory_config *config, dram_t *dm, memory_stats_t *stats )
 {
    m_config = config;
@@ -246,4 +246,259 @@ void dram_t::scheduler_frfcfs()
          }
       }
    }
+}
+
+
+
+approx_scheduler::approx_scheduler(const memory_config *config, dram_t *dm, memory_stats_t *stats) {
+   m_config = config;
+   m_stats = stats;
+   m_num_pending = 0;
+   m_dram = dm;
+	m_row_sense = 0;
+	m_nrow_per_bank_for_full = 32 / m_config->nbk; //maybe two for HBM
+	m_precision = m_config -> gpgpu_approx_dram_precision;
+
+	//parse Transpose unit target 
+	//char* tu_target = m_config -> gpgpu_approx_dram_tu_location;
+	//if(strcmp(tu_target, "L1") == 0){
+	//	std::cout<<"tutarget L1"<<std::endl;
+	//	m_tu_target=L1;
+	//}
+	//else if(strcmp(tu_target, "L2")==0)
+	//	m_tu_target=L2;
+	//else
+	//	assert(0&&"tu target error. should be L1 or L2");
+	//char* line_str = (m_tu_target == L1)? m_config->m_l1d_str : m_config->m_L2_config.m_config_string;	
+	//assert(line_str != NULL &&"registering tu target failed.");
+	//sscanf(line_str, "%u:%u:", &m_linesize, &m_linesize);
+	m_linesize=1024;
+	assert(m_linesize==1024&&"1024 maybe. other values are very strange");
+   m_queue = new std::list<dram_req_t*>;
+	m_queue->clear();
+	for(unsigned i = 0 ; i < 2 ; i++){
+		m_current_req[i]=NULL;
+		m_flag_subreq_done[i].assign(m_nrow_per_bank_for_full*m_config->nbk, false);
+	}
+
+}
+void approx_scheduler::add_req( dram_req_t *req )
+{
+	//req->data->print(stdout);
+   if(req->data->is_approx() && req->data->get_type()==READ_REQUEST){
+		assert(req->data->get_data_size()==m_linesize);
+		unsigned precision = m_precision;
+		//TODO should be separate function?
+		unsigned row_iter = (precision%m_config->nbk) ? precision / m_config->nbk + 1 : precision/m_config->nbk;
+		for(unsigned io = 0 ; io < row_iter; io++, m_row_sense++)
+		{
+			unsigned bank_iter = (io==row_iter-1) ? (precision % m_config->nbk) : m_config->nbk;
+			if(bank_iter==0) bank_iter = m_config->nbk;
+			m_row_sense = m_row_sense % (row_iter);
+			for(unsigned i = 0 ; i < bank_iter ; i++){
+				dram_req_t* sub_req = new dram_req_t(req->data, m_config->nbk, m_config->dram_bnk_indexing_policy);
+				sub_req->bk=i;
+				sub_req->row += m_row_sense;
+				sub_req->nbytes = 32;
+				m_queue->push_front(sub_req);
+				// stats
+				unsigned dram_id = req->data->get_tlx_addr().chip;
+				if (m_config->gpgpu_memlatency_stat) { 
+      			if (req->data->get_is_write()) {
+         			if ( req->data->get_access_type() != L2_WRBK_ACC ) {   //do not count L2_writebacks here 
+            			m_stats->bankwrites[req->data->get_sid()][dram_id][sub_req->bk]++;
+            			shader_mem_acc_log( req->data->get_sid(), dram_id, sub_req->bk, 'w');
+         			}
+         			m_stats->totalbankwrites[dram_id][sub_req->bk]++;
+      			} else {
+         			m_stats->bankreads[req->data->get_sid()][dram_id][sub_req->bk]++;
+         			shader_mem_acc_log( req->data->get_sid(), dram_id, sub_req->bk, 'r');
+         			m_stats->totalbankreads[dram_id][sub_req->bk]++;
+      			}
+      			m_stats->mem_access_type_stats[req->data->get_access_type()][dram_id][sub_req->bk]++;
+   			}
+			}
+		}
+
+		m_num_pending+=precision;
+		unsigned slot_idx=0;
+		if(m_current_req[0]==NULL){
+			slot_idx=0;
+		}
+		else{
+			if(m_current_req[1]!=NULL){
+				printf("num pending : %u\n", m_num_pending);
+				m_current_req[1]->data->print(stdout);
+				assert((m_current_req[1]==NULL)&&"approx scheduler double req buffer screwed");
+			}
+			slot_idx = 1;
+		}
+		
+		m_current_req[slot_idx]=req;
+		m_flag_subreq_done[slot_idx].assign(precision, false);
+	}
+	else{
+		unsigned dram_id = req->data->get_tlx_addr().chip;
+		if (m_config->gpgpu_memlatency_stat) { 
+  			if (req->data->get_is_write()) {
+     			if ( req->data->get_access_type() != L2_WRBK_ACC ) {   //do not count L2_writebacks here 
+        			m_stats->bankwrites[req->data->get_sid()][dram_id][req->bk]++;
+        			shader_mem_acc_log( req->data->get_sid(), dram_id, req->bk, 'w');
+     			}
+     			m_stats->totalbankwrites[dram_id][req->bk]++;
+  			} else {
+     			m_stats->bankreads[req->data->get_sid()][dram_id][req->bk]++;
+     			shader_mem_acc_log( req->data->get_sid(), dram_id, req->bk, 'r');
+     			m_stats->totalbankreads[dram_id][req->bk]++;
+  			}
+  			m_stats->mem_access_type_stats[req->data->get_access_type()][dram_id][req->bk]++;
+		}
+		m_num_pending++;
+	  	m_queue->push_front(req);
+	}
+}
+dram_req_t* approx_scheduler::schedule(unsigned bank, unsigned curr_row){
+
+
+
+	assert(m_num_pending>0 && !m_queue->empty());
+	
+	m_num_pending--;
+	bool rowhit = true;
+	dram_req_t* result = m_queue->back();
+	assert(result->bk == bank);
+	m_queue->pop_back();
+	if(curr_row == result->row){
+		
+	}
+	else{
+		m_stats->concurrent_row_access[m_dram->id][bank] = 0;
+   	m_stats->num_activates[m_dram->id][bank]++;
+		rowhit = false;
+	}
+	m_stats->concurrent_row_access[m_dram->id][bank]++;
+
+   //rowblp stats
+   m_dram->access_num++;
+   bool is_write = result->data->is_write();
+   if(is_write)
+  		m_dram->write_num++;
+   else
+		m_dram->read_num++;
+ 	
+	if(rowhit) {
+     m_dram->hits_num++;
+     if(is_write)
+    	  m_dram->hits_write_num++;
+     else
+    	  m_dram->hits_read_num++;
+   }
+   m_stats->row_access[m_dram->id][result->bk]++;
+
+	return result;
+
+}
+dram_req_t* approx_scheduler::next_mrq(){
+	if(!m_queue->empty())
+		return m_queue->back();
+	else
+		return NULL;
+}
+void dram_t::scheduler_approx(){
+	approx_scheduler *sched = m_approx_scheduler;
+	while ( !mrqq->empty() && sched->slot_available()) {
+		dram_req_t *req = mrqq->pop();
+
+		// Power stats
+		//if(req->data->get_type() != READ_REPLY && req->data->get_type() != WRITE_ACK)
+		m_stats->total_n_access++;
+		if(req->data->get_type() == WRITE_REQUEST){
+			m_stats->total_n_writes++;
+		}else if(req->data->get_type() == READ_REQUEST){
+			m_stats->total_n_reads++;
+		}
+		req->data->set_status(IN_PARTITION_MC_INPUT_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
+		sched->add_req(req);
+	}
+	for(unsigned jj = 0 ; jj < 1&& sched->num_pending() ; jj++){
+	dram_req_t *req;
+	
+	unsigned b=-1;
+	if(sched->num_pending()){
+		b = (sched->next_mrq())->bk;
+		assert(b>=0);
+		if(!bk[b]->mrq){
+			req = sched->schedule(b, bk[b]->curr_row);
+			bk[b]->mrq = req;
+			if (m_config->gpgpu_memlatency_stat) {
+				unsigned mrq_latency = gpu_sim_cycle + gpu_tot_sim_cycle - bk[b]->mrq->timestamp;
+            m_stats->tot_mrq_latency += mrq_latency;
+            m_stats->tot_mrq_num++;
+            bk[b]->mrq->timestamp = gpu_tot_sim_cycle + gpu_sim_cycle;
+            m_stats->mrq_lat_table[LOGB2(mrq_latency)]++;
+            if (mrq_latency > m_stats->max_mrq_latency) {
+               m_stats->max_mrq_latency = mrq_latency;
+				}
+         }
+
+			if(req->data->get_status() != IN_PARTITION_MC_BANK_ARB_QUEUE)
+				req->data->set_status(IN_PARTITION_MC_BANK_ARB_QUEUE, gpu_sim_cycle+gpu_tot_sim_cycle);
+		}
+	}
+	}
+
+}
+mem_fetch* approx_scheduler::process_return_cmd(dram_req_t* cmd){
+	
+	if((!cmd->data->is_approx()) || cmd->data->is_write()){
+
+		return cmd->data;
+	}
+	else{
+		unsigned idx = -1; //idx for double buffer
+		if(m_current_req[0]){
+			
+			idx = (cmd->data == m_current_req[0]->data)? 0 : 1;
+			if(idx){
+
+				assert(cmd->data == m_current_req[1]->data);
+			}
+		}
+		else{
+			idx = 1;
+
+			assert(m_current_req[1]!=NULL);
+		}
+		unsigned row = cmd->row - m_current_req[idx]->row;
+		unsigned bk = cmd->bk;
+		unsigned subidx = row*m_config->nbk + bk; // idx for sub request
+		unsigned precision = m_precision;
+		assert(m_flag_subreq_done[idx][subidx]==false);
+		m_flag_subreq_done[idx][subidx]=true;
+		bool done=true;
+		for(unsigned i = 0; i < precision ; i++){
+			if(m_flag_subreq_done[idx][i]==false){
+				done=false;
+				break;
+			}
+		}
+		if(done){
+			m_current_req[idx]=NULL;
+			return cmd->data;
+		}
+		else
+			return NULL;
+	}
+	return NULL;
+}
+unsigned approx_scheduler::num_pending() const{
+//	unsigned result=0;
+//	if(m_current_req[0]) result++;
+//	if(m_current_req[1]) result++;
+	return m_num_pending;
+}
+
+bool approx_scheduler::slot_available() const{
+	bool result = (m_current_req[0]==NULL || m_current_req[1]==NULL);
+	return result;
 }

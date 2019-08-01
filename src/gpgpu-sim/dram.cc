@@ -282,17 +282,32 @@ void dram_t::cycle()
            cmd->dqbytes += m_config->dram_atom_size; 
 
            if (cmd->dqbytes >= cmd->nbytes) {
-              mem_fetch *data = cmd->data; 
-              data->set_status(IN_PARTITION_MC_RETURNQ,gpu_sim_cycle+gpu_tot_sim_cycle); 
-              if( data->get_access_type() != L1_WRBK_ACC && data->get_access_type() != L2_WRBK_ACC ) {
-                 data->set_reply();
-                 returnq->push(data);
-              } else {
-                 m_memory_partition_unit->set_done(data);
-                 delete data;
-              }
-              delete cmd;
-           }
+              if(m_approx_scheduler){
+                 mem_fetch *data = m_approx_scheduler->process_return_cmd(cmd);
+                 if(data){
+                    if(data->get_access_type() != L1_WRBK_ACC && data->get_access_type() != L2_WRBK_ACC){
+                       data->set_reply();
+                       returnq->push(data);
+                    }else{
+                       m_memory_partition_unit->set_done(data);
+                       delete data;
+                    }
+                 }
+                 delete cmd;
+            }
+            else{
+               mem_fetch *data = cmd->data; 
+                  data->set_status(IN_PARTITION_MC_RETURNQ,gpu_sim_cycle+gpu_tot_sim_cycle); 
+                  if( data->get_access_type() != L1_WRBK_ACC && data->get_access_type() != L2_WRBK_ACC ) {
+                     data->set_reply();
+                     returnq->push(data);
+                  } else {
+                     m_memory_partition_unit->set_done(data);
+                     delete data;
+                  }
+                  delete cmd;
+            }
+	}
 #ifdef DRAM_VIEWCMD 
            printf("\n");
 #endif
@@ -305,6 +320,7 @@ void dram_t::cycle()
    switch (m_config->scheduler_type) {
    case DRAM_FIFO: scheduler_fifo(); break;
    case DRAM_FRFCFS: scheduler_frfcfs(); break;
+   case DRAM_APPROX: scheduler_approx(); break;
 	default:
 		printf("Error: Unknown DRAM scheduler type\n");
 		assert(0);
@@ -316,9 +332,18 @@ void dram_t::cycle()
       }
       ave_mrqs += nreqs;
       ave_mrqs_partial += nreqs;
-   } else {
+   } else if(m_config->scheduler_type == DRAM_APPROX){
+      unsigned nreqs = m_approx_scheduler->num_pending();
+      if(nreqs > max_mrqs){
+         max_mrqs = nreqs;
+      }
+      ave_mrqs += nreqs;
+      ave_mrqs_partial += nreqs;
+   }
+   else {
       if (mrqq->get_length() > max_mrqs) {
          max_mrqs = mrqq->get_length();
+         
       }
       ave_mrqs += mrqq->get_length();
       ave_mrqs_partial +=  mrqq->get_length();
@@ -428,7 +453,7 @@ void dram_t::cycle()
 	   //issue only one row/column command
 	   for (unsigned i=0;i<m_config->nbk;i++) {
 		   unsigned j = (i + prio) % m_config->nbk;
-		   if(!issued_col_cmd)
+		   if(!issued_col_cmd && !issued_row_cmd)
 		       issued_col_cmd  = issue_col_command(j);
 
 		   if(!issued_col_cmd && !issued_row_cmd)

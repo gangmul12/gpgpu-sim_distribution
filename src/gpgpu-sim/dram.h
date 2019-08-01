@@ -155,6 +155,7 @@ private:
 
    void scheduler_fifo();
    void scheduler_frfcfs();
+	void scheduler_approx();
 
    bool issue_col_command(int j);
    bool issue_row_command(int j);
@@ -233,7 +234,7 @@ private:
    unsigned int ave_mrqs;
 
    class frfcfs_scheduler* m_frfcfs_scheduler;
-
+   class approx_scheduler* m_approx_scheduler;
    unsigned int n_cmd_partial;
    unsigned int n_activity_partial;
    unsigned int n_nop_partial; 
@@ -247,6 +248,7 @@ private:
    class Stats* mrqq_Dist; //memory request queue inside DRAM  
 
    friend class frfcfs_scheduler;
+   friend class approx_scheduler;
 };
 
 #endif /*DRAM_H*/

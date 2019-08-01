@@ -179,7 +179,7 @@ void memory_stats_t::memlatstat_dram_access(mem_fetch *mf)
 {
    unsigned dram_id = mf->get_tlx_addr().chip;
    unsigned bank = mf->get_tlx_addr().bk;
-   if (m_memory_config->gpgpu_memlatency_stat) { 
+   if (m_memory_config->gpgpu_memlatency_stat && m_memory_config->scheduler_type != DRAM_APPROX) { 
       if (mf->get_is_write()) {
          if ( mf->get_sid() < m_n_shader  ) {   //do not count L2_writebacks here 
             bankwrites[mf->get_sid()][dram_id][bank]++;

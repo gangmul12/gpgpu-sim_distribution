@@ -116,6 +116,15 @@ public:
 
    unsigned get_num_flits(bool simt_to_mem);
 
+   void set_prefetch_flag(){m_prefetched=true;}
+   bool is_prefetched() const {return m_prefetched;}
+   void set_mf_cta_id(unsigned cta_id){m_cta_id = cta_id;}
+   unsigned get_mf_cta_id() const {return m_cta_id;}
+   void set_approx(){m_approx=true;}
+   void set_approx(bool approx){m_approx=approx;}
+   bool is_approx() const {return m_approx;}
+
+
    mem_fetch* get_original_mf() { return original_mf; }
    mem_fetch* get_original_wr_mf()  { return original_wr_mf; }
 
@@ -125,6 +134,8 @@ private:
    unsigned m_sid;
    unsigned m_tpc;
    unsigned m_wid;
+
+   unsigned m_cta_id;
 
    // where is this request now?
    enum mem_fetch_status m_status;
@@ -150,6 +161,9 @@ private:
 
    const struct memory_config *m_mem_config;
    unsigned icnt_flit_size;
+
+   bool m_prefetched;
+   bool m_approx;
 
    mem_fetch* original_mf;  //this pointer is set up when a request is divided into sector requests at L2 cache (if the req size > L2 sector size), so the pointer refers to the original request
    mem_fetch* original_wr_mf;  //this pointer refers to the original write req, when fetch-on-write policy is used

@@ -48,6 +48,7 @@ mem_fetch::mem_fetch( const mem_access_t &access,
    m_access = access;
    if( inst ) { 
        m_inst = *inst;
+       m_cta_id = m_inst.get_cta_id();
        assert( wid == m_inst.warp_id() );
    }
    m_data_size = access.get_size();
@@ -66,6 +67,10 @@ mem_fetch::mem_fetch( const mem_access_t &access,
    icnt_flit_size = config->icnt_flit_size;
    original_mf = m_original_mf;
    original_wr_mf = m_original_wr_mf;
+
+   m_prefetched = false;
+   m_approx = false;
+
 }
 
 mem_fetch::~mem_fetch()
@@ -87,7 +92,7 @@ void mem_fetch::print( FILE *fp, bool print_inst ) const
         fprintf(fp," <NULL mem_fetch pointer>\n");
         return;
     }
-    fprintf(fp,"  mf: uid=%6u, sid%02u:w%02u, part=%u, ", m_request_uid, m_sid, m_wid, m_raw_addr.chip );
+    fprintf(fp,"  mf: uid=%6u, sid%02u:w%02u, cta_id%02u, part=%u, prefet=%u, approx=%u, ", m_request_uid, m_sid, m_wid, m_cta_id, m_raw_addr.chip, m_prefetched, m_approx );
     m_access.print(fp);
     if( (unsigned)m_status < NUM_MEM_REQ_STAT ) 
        fprintf(fp," status = %s (%llu), ", Status_str[m_status], m_status_change );

@@ -404,7 +404,7 @@ shader_core_ctx::shader_core_ctx( class gpgpu_sim *gpu,
     
     m_last_inst_gpu_sim_cycle = 0;
     m_last_inst_gpu_tot_sim_cycle = 0;
-
+    m_shader_dump_pipeline = config -> shader_dump_pipeline;
     //Jin: for concurrent kernels on a SM
     m_occupied_n_threads = 0;
     m_occupied_shmem = 0;
@@ -438,6 +438,11 @@ void shader_core_ctx::reinit(unsigned start_thread, unsigned end_thread, bool re
       m_warp[i].reset();
       m_simt_stack[i]->reset();
    }
+
+   m_core_demand_load_outstanding = 0;
+   m_core_prefetch_load_outstanding = 0;
+
+
 }
 
 void shader_core_ctx::init_warps( unsigned cta_id, unsigned start_thread, unsigned end_thread, unsigned ctaid, int cta_size, unsigned kernel_id )
@@ -615,6 +620,10 @@ void shader_core_stats::print( FILE* fout ) const
 
    m_outgoing_traffic_stats->print(fout); 
    m_incoming_traffic_stats->print(fout); 
+  fprintf(fout, "-------------------------------------------------\n");
+  fprintf(fout, "Prefetcher Stat\n");
+  fprintf(fout, "\tn_early_evicted_request = %u\n", n_early_evict);
+  fprintf(fout, "-------------------------------------------------\n");
 }
 
 void shader_core_stats::event_warp_issued( unsigned s_id, unsigned warp_id, unsigned num_issued, unsigned dynamic_warp_id ) {
@@ -859,7 +868,8 @@ void shader_core_ctx::issue_warp( register_set& pipe_reg_set, const warp_inst_t*
     m_warp[warp_id].ibuffer_free();
     assert(next_inst->valid());
     **pipe_reg = *next_inst; // static instruction information
-    (*pipe_reg)->issue( active_mask, warp_id, gpu_tot_sim_cycle + gpu_sim_cycle, m_warp[warp_id].get_dynamic_warp_id(), sch_id ); // dynamic instruction information
+
+	 (*pipe_reg)->issue( active_mask, warp_id, gpu_tot_sim_cycle + gpu_sim_cycle, m_warp[warp_id].get_dynamic_warp_id(), sch_id, m_warp[warp_id].get_cta_id() ); // dynamic instruction information
     m_stats->shader_cycle_distro[2+(*pipe_reg)->active_count()]++;
     func_exec_inst( **pipe_reg );
     if( next_inst->op == BARRIER_OP ){
@@ -989,7 +999,7 @@ void scheduler_unit::cycle()
     bool valid_inst = false;  // there was one warp with a valid instruction to issue (didn't require flush due to control hazard)
     bool ready_inst = false;  // of the valid instructions, there was one not waiting for pending register writes
     bool issued_inst = false; // of these we issued one
-
+    unsigned cycle_issued = 0;
     order_warps();
     for ( std::vector< shd_warp_t* >::const_iterator iter = m_next_cycle_prioritized_warps.begin();
           iter != m_next_cycle_prioritized_warps.end();
@@ -1179,6 +1189,8 @@ void scheduler_unit::cycle()
             	m_stats->dual_issue_nums[m_id]++;
             else
             	abort();   //issued should be > 0
+	    warp(warp_id).increment_num_issued(issued);
+	    cycle_issued += issued;
 
             break;
         } 
@@ -1191,6 +1203,19 @@ void scheduler_unit::cycle()
         m_stats->shader_cycle_distro[1]++; // waiting for RAW hazards (possibly due to memory) 
     else if( !issued_inst ) 
         m_stats->shader_cycle_distro[2]++; // pipeline stalled
+
+
+    if(m_shader->get_config()->shader_dump_pipeline){
+	if(get_sid()==0){
+	    std::cout<<"sid"<<get_sid()<<" : ";
+	    for(size_t ii = 0 ; ii < m_supervised_warps.size() ; ii++){
+		std::cout<<" warp"<<ii<<" : "<<warp(ii).get_num_issued();
+	    }
+	    std::cout<<" @ "<<gpu_sim_cycle<<std::endl;
+	}
+    }
+
+
 }
 
 void scheduler_unit::do_on_warp_issued( unsigned warp_id,
@@ -1623,6 +1648,77 @@ ldst_unit::process_cache_access( cache_t* cache,
     return result;
 }
 
+// check if the prefetch request to be sent hit in the cache.
+// if hit, eliminate that prefetch request
+// todo
+// send request to mem_port
+void ldst_unit::process_prefetch_cache_access( data_cache* cache,
+                                 new_addr_type address,
+                                 std::list<cache_event>& events,
+                                 mem_fetch *mf,
+                                 enum cache_request_status status )
+{
+    bool write_sent = was_write_sent(events);
+    bool read_sent = was_read_sent(events);
+
+    assert(!write_sent);
+
+    if ( status == HIT ) {
+        assert( !read_sent );
+        m_prefetcher->del_req_from_top();// inst.accessq_pop_back();
+        delete mf;
+    } else if ( status == RESERVATION_FAIL) {
+        assert( !read_sent );
+        delete mf;
+    } else if (status == MISS){
+        m_prefetcher->del_req_from_top();// inst.accessq_pop_back();
+    }
+    else {
+      assert(status == HIT_RESERVED);
+      m_prefetcher->del_req_from_top();
+    }
+}
+
+// check if data is already in cache and send prefetch request to icnt
+void ldst_unit::process_prefetch_queue( data_cache *cache)
+{
+    if( m_prefetcher->queue_empty() )
+        return;
+    const mem_access_t& access = m_prefetcher->cal_pref_q_top_access();
+    unsigned cid = m_prefetcher->cal_pref_q_top_cta_id();
+    unsigned wid = m_prefetcher->cal_pref_q_top_warp_id();
+    mem_fetch *mf = m_mf_allocator->alloc(access.get_addr(),access.get_type(),access.get_size(),false,cid,wid);
+    std::list<cache_event> events;
+
+    assert(mf->is_prefetched() == false);
+
+    mf->set_prefetch_flag();
+
+    enum cache_request_status status_pre = cache->pre_access(mf->get_addr(),mf,gpu_sim_cycle+gpu_tot_sim_cycle,events);
+    m_stats->n_prefetch_access++;
+    // modified version : prefetch request is stored in miss queue
+    process_prefetch_cache_access( cache, mf->get_addr(), events, mf, status_pre );
+}
+
+// this function manages all process of prefetching
+void ldst_unit::process_prefetch_total( data_cache *cache, const warp_inst_t &inst, bool is_empty_or_notload )
+{
+
+    // calculate prefetch request and save prefetch request into prefetch_request_queue
+    // if is_emptyorload is true : just prfetch using last address's information
+    // else false : prefetch using address that is predicted using previous address's information
+
+    if(!inst.accessq_empty()){
+      mem_fetch *mf = m_mf_allocator->alloc(inst,inst.accessq_back());
+      mem_access_t access(GLOBAL_ACC_R, mf->get_addr(), mf->get_data_size(), false);
+      m_prefetcher->do_prefetch(inst, access, mf->get_data_size());
+      delete mf;
+    }
+    process_prefetch_queue(cache);
+}
+
+
+
 mem_stage_stall_type ldst_unit::process_memory_access_queue( cache_t *cache, warp_inst_t &inst )
 {
     mem_stage_stall_type result = NO_RC_FAIL;
@@ -1636,6 +1732,13 @@ mem_stage_stall_type ldst_unit::process_memory_access_queue( cache_t *cache, war
     mem_fetch *mf = m_mf_allocator->alloc(inst,inst.accessq_back());
     std::list<cache_event> events;
     enum cache_request_status status = cache->access(mf->get_addr(),mf,gpu_sim_cycle+gpu_tot_sim_cycle,events);
+// print trace for cache access except L1D
+    if(m_shader_cache_dump_trace){
+      if(!(status == RESERVATION_FAIL )){
+        mf->print(stdout);
+      }
+    }
+
     return process_cache_access( cache, mf->get_addr(), inst, events, mf, status );
 }
 
@@ -1676,6 +1779,30 @@ mem_stage_stall_type ldst_unit::process_memory_access_queue_l1cache( l1_cache *c
     {
 		std::list<cache_event> events;
 		enum cache_request_status status = cache->access(mf->get_addr(),mf,gpu_sim_cycle+gpu_tot_sim_cycle,events);
+
+// check if inst has been prefetched using m_prefetch_map
+		if(m_config->m_L1D_config.have_prefetcher){
+			if(inst.is_load()){
+				std::map<new_addr_type,unsigned>::iterator iter;
+      				iter = m_prefetch_map.find(mf->get_addr());
+      				if(iter!=m_prefetch_map.end()){//has been prefetched
+        		 		if(status != HIT ){// early evict jyj edited 0807
+        		    			m_stats->n_early_evict++;
+				 	}
+      				}
+    			}
+		}
+// print trace for L1D cache access 
+    if(m_shader_cache_dump_trace){
+      if(!(status == RESERVATION_FAIL )){
+        mf->print(stdout);
+      }
+    }
+
+	 if(m_config->m_L1D_config.have_prefetcher){
+    	process_prefetch_total(cache, inst, false);
+	 }
+///////////////////////////////////////////
 		return process_cache_access( cache, mf->get_addr(), inst, events, mf, status );
     }
 }
@@ -1688,6 +1815,21 @@ void ldst_unit::L1_latency_queue_cycle()
 		    mem_fetch* mf_next = l1_latency_queue[0];
 			std::list<cache_event> events;
 			enum cache_request_status status = m_L1D->access(mf_next->get_addr(),mf_next,gpu_sim_cycle+gpu_tot_sim_cycle,events);
+// check if inst has been prefetched using m_prefetch_map
+			
+			if(m_config->m_L1D_config.have_prefetcher){
+				if(mf_next->get_inst().is_load()){
+					std::map<new_addr_type,unsigned>::iterator iter;
+					iter = m_prefetch_map.find(mf_next->get_addr());
+					if(iter!=m_prefetch_map.end()){//has been prefetched
+						if(status != HIT ){// early evict jyj edited 0807
+							m_stats->n_early_evict++;
+						}
+					}
+				}
+				process_prefetch_total(m_L1D, mf_next->get_inst(), false);
+			}
+
 
 		   bool write_sent = was_write_sent(events);
 		   bool read_sent = was_read_sent(events);
@@ -1787,6 +1929,15 @@ bool ldst_unit::memory_cycle( warp_inst_t &inst, mem_stage_stall_type &stall_rea
    assert( !inst.accessq_empty() );
    mem_stage_stall_type stall_cond = NO_RC_FAIL;
    const mem_access_t &access = inst.accessq_back();
+   if(m_config->m_L1D_config.have_prefetcher){
+      if (inst.is_load()){
+         mem_fetch *mf_prefetch_temp = m_mf_allocator->alloc(inst,access);
+      	 unsigned inst_uid = inst.get_uid();
+      	 m_prefetcher->update_address_history_for_prefetch_percta_perpc_store_uid(mf_prefetch_temp, inst_uid);
+      	 delete mf_prefetch_temp;
+      }
+   }
+
 
    bool bypassL1D = false; 
    if ( CACHE_GLOBAL == inst.cache_op || (m_L1D == NULL) ) {
@@ -2075,12 +2226,32 @@ void ldst_unit::init( mem_fetch_interface *icnt,
     m_L1T = new tex_cache(L1T_name,m_config->m_L1T_config,m_sid,get_shader_texture_cache_id(),icnt,IN_L1T_MISS_QUEUE,IN_SHADER_L1T_ROB);
     m_L1C = new read_only_cache(L1C_name,m_config->m_L1C_config,m_sid,get_shader_constant_cache_id(),icnt,IN_L1C_MISS_QUEUE);
     m_L1D = NULL;
+
+    if(m_config->m_L1D_config.have_prefetcher){
+	m_prefetcher = new Prefetch_Unit( m_config->m_L1Prefetcher_type_config,
+        m_config->m_L1Prefetcher_check_row_change_config,
+        m_config->m_L1Prefetcher_nextline_config,
+        m_config->m_L1Prefetcher_cta_x_dim_config,
+        m_config->m_L1Prefetcher_cta_y_dim_config,
+        m_config->m_L1Prefetcher_img_x_size_config,
+        m_config->m_L1Prefetcher_img_y_size_config,
+        m_config->m_L1Prefetcher_img_z_size_config,
+        m_config->m_prefetcher_direction);
+    }
+
+
+
+
+
     m_mem_rc = NO_RC_FAIL;
     m_num_writeback_clients=5; // = shared memory, global/local (uncached), L1D, L1T, L1C
     m_writeback_arb = 0;
     m_next_global=NULL;
     m_last_inst_gpu_sim_cycle=0;
     m_last_inst_gpu_tot_sim_cycle=0;
+
+    m_shader_cache_dump_trace = config->shader_cache_dump_trace;
+
 }
 
 
@@ -2116,7 +2287,9 @@ ldst_unit::ldst_unit( mem_fetch_interface *icnt,
                               m_icnt,
                               m_mf_allocator,
                               IN_L1D_MISS_QUEUE );
-
+	if(m_config->m_L1D_config.have_prefetcher){
+		m_stats->set_l1d_pointer(m_L1D);
+	}
         if(m_config->m_L1D_config.l1_latency > 0)
 	    {
         	for(int i=0; i<m_config->m_L1D_config.l1_latency; i++ )
@@ -2309,7 +2482,17 @@ void ldst_unit::cycle()
 
    if( !m_response_fifo.empty() ) {
        mem_fetch *mf = m_response_fifo.front();
-       if (mf->get_access_type() == TEXTURE_ACC_R) {
+
+
+		 assert(! ( (!m_config->m_L1D_config.have_prefetcher) &&mf->is_prefetched()));
+		 if(mf->is_prefetched()){
+			 if(m_L1D->fill_port_free()){
+				 m_L1D->fill(mf,gpu_sim_cycle+gpu_tot_sim_cycle);
+             m_response_fifo.pop_front();
+             m_prefetch_map[mf->get_addr()]=mf->get_timestamp();
+             delete mf;
+           }
+       } else if (mf->get_access_type() == TEXTURE_ACC_R) {
            if (m_L1T->fill_port_free()) {
                m_L1T->fill(mf,gpu_sim_cycle+gpu_tot_sim_cycle);
                m_response_fifo.pop_front(); 
@@ -2322,7 +2505,13 @@ void ldst_unit::cycle()
            }
        } else {
     	   if( mf->get_type() == WRITE_ACK || ( m_config->gpgpu_perfect_mem && mf->get_is_write() )) {
-               m_core->store_ack(mf);
+// TODO : fix it
+               if(m_config->m_L1D_config.get_mshr_type()==SECTOR_ASSOC){
+		   for(unsigned ii=0; ii < mf->get_data_size()/SECTOR_SIZE; ii++){
+			m_core->store_ack(mf);
+		   }
+	       }
+	       else m_core->store_ack(mf);
                m_response_fifo.pop_front();
                delete mf;
            } else {
@@ -2354,7 +2543,12 @@ void ldst_unit::cycle()
    m_L1T->cycle();
    m_L1C->cycle();
    if( m_L1D ) {
-	   m_L1D->cycle();
+      if(m_config->m_L1D_config.have_prefetcher){
+         m_L1D->pre_cycle(m_prefetcher, gpu_sim_cycle + gpu_tot_sim_cycle);
+      }
+      else{
+         m_L1D->cycle();
+      }
 	   if(m_config->m_L1D_config.l1_latency > 0)
 	   		L1_latency_queue_cycle();
    }
@@ -2571,6 +2765,25 @@ void gpgpu_sim::shader_print_cache_stats( FILE *fout ) const{
         }
         fprintf(fout, "\tL1D_total_cache_pending_hits = %llu\n", total_css.pending_hits);
         fprintf(fout, "\tL1D_total_cache_reservation_fails = %llu\n", total_css.res_fails);
+        if(total_css.n_prefetch_access!=0){
+          fprintf(fout,"--------------- Prefetch Total ------------------\n");
+          unsigned pre_hit_num = total_css.n_prefetch_hit;
+          unsigned pre_reserved_hit_num = total_css.n_prefetch_reserved_hit;
+          fprintf(fout, "\tPrefetch_access = %u\n", total_css.n_prefetch_access);
+          fprintf(fout, "\tPrefetch_hit_num = %u\n", total_css.n_prefetch_hit);
+          unsigned int temp_issued_prefetch = total_css.n_issued_prefetch;
+          fprintf(fout, "\tPrefetch_issued_num = %u\n", temp_issued_prefetch);
+          unsigned total_pre_distance = total_css.n_prefetch_distance;
+          unsigned total_pre_access = total_css.n_prefetch_access;
+          float avg_dist = (float)total_pre_distance/(float)pre_hit_num; //jyj edited 0807
+          fprintf(fout, "\tPrefetch_distance = %u\n", total_pre_distance);
+          fprintf(fout, "\tPrefetch_Avg_distance = %.4f\n", avg_dist);
+          fprintf(fout, "\tHit_Reserved_num = %u\n", pre_reserved_hit_num);
+     
+          fprintf(fout,"-------------------------------------------------\n");
+        }
+
+
         total_css.print_port_stats(fout, "\tL1D_cache"); 
     }
 
@@ -3416,6 +3629,21 @@ void shader_core_ctx::store_ack( class mem_fetch *mf )
     m_warp[warp_id].dec_store_req();
 }
 
+// [outstanding req] 
+void shader_core_ctx::dec_demand_load_ack( class mem_fetch *mf )
+{
+  assert( (mf->is_prefetched() == false )  || ( m_config->gpgpu_perfect_mem && !(mf->get_is_write()) ) );
+    unsigned warp_id = mf->get_wid();
+    m_warp[warp_id].dec_demand_load_req();
+}
+void shader_core_ctx::dec_prefetch_load_ack( class mem_fetch *mf )
+{
+  assert( (mf->is_prefetched() == true ) || ( m_config->gpgpu_perfect_mem && !(mf->get_is_write()) ) );
+    unsigned warp_id = mf->get_wid();
+    m_warp[warp_id].dec_prefetch_load_req();
+}
+
+
 void shader_core_ctx::print_cache_stats( FILE *fp, unsigned& dl1_accesses, unsigned& dl1_misses ) {
    m_ldst_unit->print_cache_stats( fp, dl1_accesses, dl1_misses );
 }
@@ -3439,6 +3667,72 @@ void shader_core_ctx::get_L1C_sub_stats(struct cache_sub_stats &css) const{
 void shader_core_ctx::get_L1T_sub_stats(struct cache_sub_stats &css) const{
     m_ldst_unit->get_L1T_sub_stats(css);
 }
+std::vector<unsigned> shader_core_ctx::get_dist_coll(){
+    return m_ldst_unit->get_dist_coll();
+}
+std::vector<unsigned> ldst_unit::get_dist_coll(){
+    return m_L1D->get_dist_coll();
+}
+unsigned shader_core_ctx::get_min_dist(){
+    return m_ldst_unit->get_min_dist();
+}
+unsigned ldst_unit::get_min_dist(){
+    return m_L1D->get_min_dist();
+}
+unsigned shader_core_ctx::get_max_dist(){
+    return m_ldst_unit->get_max_dist();
+}
+unsigned ldst_unit::get_max_dist(){
+    return m_L1D->get_max_dist();
+}
+unsigned shader_core_ctx::get_dist_size(){
+    return m_ldst_unit->get_dist_size();
+}
+unsigned ldst_unit::get_dist_size(){
+    return m_L1D->get_dist_size();
+}
+std::vector<unsigned> simt_core_cluster::get_dist_coll(){
+  unsigned tot_size =0;
+  for(unsigned i=0; i < m_config->n_simt_cores_per_cluster; i++){
+    tot_size+= m_core[i]->get_dist_size();
+  }
+  std::vector<unsigned> v;
+  v.reserve(tot_size);
+  for(unsigned i=0; i < m_config->n_simt_cores_per_cluster; i++){
+    std::vector<unsigned> tmp = m_core[i]->get_dist_coll();
+    v.insert(v.end(), tmp.begin(), tmp.end());
+    tmp.clear();
+  }
+  return v;
+}
+unsigned simt_core_cluster::get_min_dist(){
+  unsigned min=256;
+  for(unsigned i=0; i < m_config->n_simt_cores_per_cluster; i++){
+    unsigned tmp_min = m_core[i]->get_min_dist();
+    if(tmp_min<min){
+      min = tmp_min;
+    }
+  }
+  return min;
+}
+unsigned simt_core_cluster::get_max_dist(){
+  unsigned max=1;
+  for(unsigned i=0; i < m_config->n_simt_cores_per_cluster; i++){
+    unsigned tmp_max = m_core[i]->get_max_dist();
+    if(tmp_max>max){
+      max = tmp_max;
+    }
+  }
+  return max;
+}
+unsigned simt_core_cluster::get_dist_size(){
+  unsigned total_size =0;
+  for(unsigned i=0; i < m_config->n_simt_cores_per_cluster; i++){
+    total_size+= m_core[i]->get_dist_size();
+  }
+  return total_size;
+}
+
 
 void shader_core_ctx::get_icnt_power_stats(long &n_simt_to_mem, long &n_mem_to_simt) const{
 	n_simt_to_mem += m_stats->n_simt_to_mem[m_sid];
@@ -3995,12 +4289,19 @@ void simt_core_cluster::icnt_cycle()
         // The packet size varies depending on the type of request: 
         // - For read request and atomic request, the packet contains the data 
         // - For write-ack, the packet only has control metadata
-        unsigned int packet_size = (mf->get_is_write())? mf->get_ctrl_size() : mf->size(); 
-        m_stats->m_incoming_traffic_stats->record_traffic(mf, packet_size); 
-        mf->set_status(IN_CLUSTER_TO_SHADER_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
-        //m_memory_stats->memlatstat_read_done(mf,m_shader_config->max_warps_per_shader);
-        m_response_fifo.push_back(mf);
-        m_stats->n_mem_to_simt[m_cluster_id] += mf->get_num_flits(false);
+        unsigned int packet_size = (mf->get_is_write())? mf->get_ctrl_size() : mf->size();
+// for deadlock avoid
+	unsigned cid = m_config->sid_to_cid(mf->get_sid());
+        if (m_core[cid]->get_not_completed()){
+		m_stats->m_incoming_traffic_stats->record_traffic(mf, packet_size); 
+		mf->set_status(IN_CLUSTER_TO_SHADER_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
+	        //m_memory_stats->memlatstat_read_done(mf,m_shader_config->max_warps_per_shader);
+		m_response_fifo.push_back(mf);
+		m_stats->n_mem_to_simt[m_cluster_id] += mf->get_num_flits(false);
+// for deadlock avoid		
+	} else{
+		delete mf;
+	}
     }
 }
 

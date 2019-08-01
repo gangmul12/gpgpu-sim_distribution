@@ -189,6 +189,9 @@ void memory_config::reg_options(class OptionParser * opp)
     option_parser_register(opp, "-gpgpu_dram_return_queue_size", OPT_INT32, &gpgpu_dram_return_queue_size, 
                 "0 = unlimited (default); # entries per chip",
                 "0");
+    option_parser_register(opp, "-gpgpu_approx_dram_precision", OPT_UINT32, &gpgpu_approx_dram_precision,
+		"how much bit will be fetched from dram? default : 32",
+		"32");
     option_parser_register(opp, "-gpgpu_dram_buswidth", OPT_UINT32, &busW, 
                  "default = 4 bytes (8 bytes per cycle at DDR)",
                  "4");
@@ -229,6 +232,10 @@ void memory_config::reg_options(class OptionParser * opp)
                                "icnt_flit_size",
                                "32");
     m_address_mapping.addrdec_setoption(opp);
+
+    option_parser_register(opp, "-dram_dump_trace", OPT_BOOL, &dram_dump_trace,
+			 	"dump dram mf trace (default 0)",
+				"0");
 }
 
 void shader_core_config::reg_options(class OptionParser * opp)
@@ -260,6 +267,9 @@ void shader_core_config::reg_options(class OptionParser * opp)
     option_parser_register(opp, "-smem_latency", OPT_UINT32, &smem_latency,
                  "smem Latency",
                  "3");
+    option_parser_register(opp, "-l1_prefetcher", OPT_BOOL, &m_L1D_config.have_prefetcher,
+		"L1 prefetcher",
+		"0");
     option_parser_register(opp, "-gpgpu_cache:dl1PrefL1", OPT_CSTR, &m_L1D_config.m_config_stringPrefL1,
                    "per-shader L1 data cache config "
                    " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_alloc>,<mshr>:<N>:<merge>,<mq> | none}",
@@ -478,6 +488,58 @@ void shader_core_config::reg_options(class OptionParser * opp)
     option_parser_register(opp, "-gpgpu_concurrent_kernel_sm", OPT_BOOL, &gpgpu_concurrent_kernel_sm, 
                 "Support concurrent kernels on a SM (default = disabled)", 
                 "0");
+    option_parser_register(opp, "-shader_cache_dump_trace", OPT_BOOL, &shader_cache_dump_trace,
+		"dump shader cache's successful access (default 0)",
+		"0");
+    option_parser_register(opp, "-shader_dump_pipeline", OPT_BOOL, &shader_dump_pipeline,
+		"dump shader pipeline for debug stats (default 0)",
+		"0");
+    option_parser_register(opp, "-gpgpu_cache:L1Prefetcher_type", OPT_UINT32, &m_L1Prefetcher_type_config,
+	        "per-shader L1 data cache's Prefetcher type config "
+		"Stride : 1 / Nextline : 0 (Default = 1 nextline)"
+		"May be we should add image size as new parameters",
+		"0" );
+
+   option_parser_register(opp, "-gpgpu_cache:L1Prefetcher_check_Row_Change", OPT_UINT32, &m_L1Prefetcher_check_row_change_config,
+				                    "per-shader L1 data cache's Prefetcher type config "
+					                 "If 1 : consider row change when prefetching (adaptive stride) / 0 : just simple prefetching"
+				                    "Default = 1",
+				                    "1" );
+
+   option_parser_register(opp, "-gpgpu_cache:L1Prefetcher_k_nextline", OPT_UINT32, &m_L1Prefetcher_nextline_config,
+				                   "per-shader L1 data cache's Prefetcher config "
+										 "If use Nextline : k nextline / use Stride : don't care about this parameter (Defalut = 1 nextline)",
+										 "1" );
+
+   option_parser_register(opp, "-gpgpu_cache:L1Prefetcher_CTA_x_dim", OPT_UINT32, &m_L1Prefetcher_cta_x_dim_config,
+				                    "per-shader L1 data cache's Prefetcher config "
+			                     "CTA dimension : x (ex) CTA (32,8) --> value = 32 / default = 32",
+				                   "32" );
+
+   option_parser_register(opp, "-gpgpu_cache:L1Prefetcher_CTA_y_dim", OPT_UINT32, &m_L1Prefetcher_cta_y_dim_config,
+				                     "per-shader L1 data cache's Prefetcher config "
+				                   "CTA dimension : y (ex) CTA (32,8) --> value = 8 / default = 8",
+				                    "8" );
+
+   option_parser_register(opp, "-gpgpu_cache:L1Prefetcher_img_x_size", OPT_UINT32, &m_L1Prefetcher_img_x_size_config,
+				                   "per-shader L1 data cache's Prefetcher config "
+   			                    "img size : x (You must put this value)",
+	  		                     "0" );
+
+   option_parser_register(opp, "-gpgpu_cache:L1Prefetcher_img_y_size", OPT_UINT32, &m_L1Prefetcher_img_y_size_config,
+				                    "per-shader L1 data cache's Prefetcher config "
+			                     "img size : y (You must put this value)",
+				                   "0" );
+
+   option_parser_register(opp, "-gpgpu_cache:L1Prefetcher_img_z_size", OPT_UINT32, &m_L1Prefetcher_img_z_size_config,
+			                     "per-shader L1 data cache's Prefetcher config "
+				                   "img size : z (You must put this value)",
+				                    "0" );
+
+   option_parser_register(opp, "-gpgpu_prefetch_direction", OPT_UINT32, &m_prefetcher_direction, 
+				                   "prefetch direction - same as the CTA scheduling direction (1=ROW, 2=COL, 3=TENSOR)",
+				                    "1");
+
 
 }
 

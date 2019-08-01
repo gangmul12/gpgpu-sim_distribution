@@ -29,6 +29,11 @@
 #include "stat-tool.h"
 #include <assert.h>
 
+// if use_double_cycle_access is 1 ( = true ), it needs 2 cycle to send request to memport
+// else if it is 0 ( = false ), same with original function
+#define USE_DOUBLE_CYCLE_ACCESS 1
+
+
 // used to allocate memory that is large enough to adapt the changes in cache size across kernels
 
 const char * cache_request_status_str(enum cache_request_status status) 
@@ -193,7 +198,7 @@ tag_array::tag_array( cache_config &config,
     //assert( m_config.m_write_policy == READ_ONLY ); Old assert
 	unsigned cache_lines_num = config.get_max_num_lines();
 	m_lines = new cache_block_t*[cache_lines_num];
-	if(config.m_cache_type == NORMAL)
+	if(config.m_cache_type == NORMAL || config.m_cache_type == LARGE)
 	{
 		for(unsigned i=0; i<cache_lines_num; ++i)
 			m_lines[i] = new line_cache_block();
@@ -386,10 +391,10 @@ enum cache_request_status tag_array::access( new_addr_type addr, unsigned time, 
 
 void tag_array::fill( new_addr_type addr, unsigned time, mem_fetch* mf)
 {
-    fill(addr, time, mf->get_access_sector_mask());
+// for prefetch hit statistics
+	fill(addr, time, mf->get_access_sector_mask(), mf->is_prefetched());
 }
-
-void tag_array::fill( new_addr_type addr, unsigned time, mem_access_sector_mask_t mask )
+void tag_array::fill( new_addr_type addr, unsigned time, mem_access_sector_mask_t mask, bool is_prefetched )
 {
     //assert( m_config.m_alloc_policy == ON_FILL );
     unsigned idx;
@@ -403,12 +408,17 @@ void tag_array::fill( new_addr_type addr, unsigned time, mem_access_sector_mask_
     }
 
     m_lines[idx]->fill(time, mask);
+    m_lines[idx]->m_prefetched = is_prefetched;
 }
 
 void tag_array::fill( unsigned index, unsigned time, mem_fetch* mf)
 {
     assert( m_config.m_alloc_policy == ON_MISS );
     m_lines[index]->fill(time, mf->get_access_sector_mask());
+// for prefetch hit statistic
+    if(m_config.have_prefetcher){
+	m_lines[index]->m_prefetched = mf->is_prefetched();
+    }
 }
 
 
@@ -533,6 +543,22 @@ bool mshr_table::full( new_addr_type block_addr ) const{
 
 /// Add or merge this access
 void mshr_table::add( new_addr_type block_addr, mem_fetch *mf ){
+// if prefetch request is already in mshr for corresponding block_addr, don't add
+    if(m_have_prefetcher && mf->is_prefetched()){
+        bool prefetch_in_mshrs = false;
+        std::list<mem_fetch*>::iterator iter_mf;
+        for(iter_mf = m_data[block_addr].m_list.begin(); iter_mf != m_data[block_addr].m_list.end(); ++iter_mf){
+            if((*iter_mf)->is_prefetched()){
+                prefetch_in_mshrs = true;
+            }
+        }
+        if(!prefetch_in_mshrs){
+            m_data[block_addr].m_list.push_back(mf);
+            assert( m_data.size() <= m_num_entries );
+            assert( m_data[block_addr].m_list.size() <= m_max_merged );
+        }
+    }
+    else{
 	m_data[block_addr].m_list.push_back(mf);
 	assert( m_data.size() <= m_num_entries );
 	assert( m_data[block_addr].m_list.size() <= m_max_merged );
@@ -540,6 +566,7 @@ void mshr_table::add( new_addr_type block_addr, mem_fetch *mf ){
 	if ( mf->isatomic() ) {
 		m_data[block_addr].m_has_atomic = true;
 	}
+    }
 }
 
 /// check is_read_after_write_pending
@@ -568,6 +595,19 @@ void mshr_table::mark_ready( new_addr_type block_addr, bool &has_atomic ){
     assert( m_current_response.size() <= m_data.size() );
 }
 
+// if mf is prefetched, it may not exist in inst's mshrs
+// so in this case, don't check assertion
+// this function maybe useless since mark ready is used for writeback, but prefetched data will not be writebacked
+void mshr_table::mark_ready_prefetch( new_addr_type block_addr, bool &has_atomic ){
+    assert( !busy() );
+    table::iterator a = m_data.find(block_addr);
+    if( a != m_data.end() ){
+        m_current_response.push_back( block_addr );
+        has_atomic = a->second.m_has_atomic;
+        assert( m_current_response.size() <= m_data.size() );
+    }
+}
+
 /// Returns next ready access
 mem_fetch *mshr_table::next_access(){
     assert( access_ready() );
@@ -581,6 +621,22 @@ mem_fetch *mshr_table::next_access(){
         m_current_response.pop_front();
     }
     return result;
+}
+// To delete contents of mshr_prefetch
+void mshr_table::delete_content( new_addr_type block_addr ){
+    m_data.erase(block_addr);
+}
+// delete prefetch req in mshr
+void mshr_table::delete_prefetched_req_in_mshr( new_addr_type block_addr ){
+    std::list<mem_fetch*>::iterator it_prefetch = m_data[block_addr].m_list.begin();
+    while(it_prefetch != m_data[block_addr].m_list.end()){
+        if((*it_prefetch)->is_prefetched()){
+            m_data[block_addr].m_list.erase(it_prefetch++);
+        }
+        else{
+            ++it_prefetch;
+        }
+    }
 }
 
 void mshr_table::display( FILE *fp ) const{
@@ -609,7 +665,14 @@ cache_stats::cache_stats(){
 	}
     m_cache_port_available_cycles = 0; 
     m_cache_data_port_busy_cycles = 0; 
-    m_cache_fill_port_busy_cycles = 0; 
+    m_cache_fill_port_busy_cycles = 0;
+    m_prefetch_stall_cycle =0;
+    m_n_prefetch_access =0;
+    m_n_prefetch_hit=0;
+    m_n_issued_prefetch=0;
+    m_n_prefetch_distance=0;
+    m_n_prefetch_reserved_hit=0;
+    m_n_late_distance =0;
 }
 
 void cache_stats::clear(){
@@ -622,7 +685,14 @@ void cache_stats::clear(){
 	}
     m_cache_port_available_cycles = 0; 
     m_cache_data_port_busy_cycles = 0; 
-    m_cache_fill_port_busy_cycles = 0; 
+    m_cache_fill_port_busy_cycles = 0;
+    m_prefetch_stall_cycle =0;
+    m_n_prefetch_access =0;
+    m_n_prefetch_hit=0;
+    m_n_issued_prefetch=0;
+    m_n_prefetch_distance=0;
+    m_n_prefetch_reserved_hit=0;
+    m_n_late_distance=0;
 }
 
 void cache_stats::clear_pw(){
@@ -727,7 +797,8 @@ cache_stats cache_stats::operator+(const cache_stats &cs){
         }
     ret.m_cache_port_available_cycles = m_cache_port_available_cycles + cs.m_cache_port_available_cycles; 
     ret.m_cache_data_port_busy_cycles = m_cache_data_port_busy_cycles + cs.m_cache_data_port_busy_cycles; 
-    ret.m_cache_fill_port_busy_cycles = m_cache_fill_port_busy_cycles + cs.m_cache_fill_port_busy_cycles; 
+    ret.m_cache_fill_port_busy_cycles = m_cache_fill_port_busy_cycles + cs.m_cache_fill_port_busy_cycles;
+    ret.m_prefetch_stall_cycle = m_prefetch_stall_cycle + cs.m_prefetch_stall_cycle;
     return ret;
 }
 
@@ -749,6 +820,7 @@ cache_stats &cache_stats::operator+=(const cache_stats &cs){
     m_cache_port_available_cycles += cs.m_cache_port_available_cycles; 
     m_cache_data_port_busy_cycles += cs.m_cache_data_port_busy_cycles; 
     m_cache_fill_port_busy_cycles += cs.m_cache_fill_port_busy_cycles; 
+    m_prefetch_stall_cycle += cs.m_prefetch_stall_cycle;
     return *this;
 }
 
@@ -856,7 +928,13 @@ void cache_stats::get_sub_stats(struct cache_sub_stats &css) const{
     t_css.port_available_cycles = m_cache_port_available_cycles; 
     t_css.data_port_busy_cycles = m_cache_data_port_busy_cycles; 
     t_css.fill_port_busy_cycles = m_cache_fill_port_busy_cycles; 
-
+    t_css.prefetch_stall_cycle = m_prefetch_stall_cycle;
+    t_css.n_prefetch_access = m_n_prefetch_access;
+    t_css.n_prefetch_hit = m_n_prefetch_hit;
+    t_css.n_issued_prefetch = m_n_issued_prefetch;
+    t_css.n_prefetch_distance = m_n_prefetch_distance;
+    t_css.n_prefetch_reserved_hit = m_n_prefetch_reserved_hit;
+    t_css.n_late_distance=m_n_late_distance;
     css = t_css;
 }
 
@@ -981,7 +1059,7 @@ void baseline_cache::bandwidth_management::use_data_port(mem_fetch *mf, enum cac
 void baseline_cache::bandwidth_management::use_fill_port(mem_fetch *mf)
 {
     // assume filling the entire line with the returned request 
-    unsigned fill_cycles = m_config.get_atom_sz() / m_config.m_data_port_width;
+    unsigned fill_cycles = m_config.get_atom_sz() / m_config.m_fill_port_width;
     m_fill_port_occupied_cycles += fill_cycles; 
 }
 
@@ -1139,13 +1217,88 @@ void baseline_cache::send_read_request(new_addr_type addr, new_addr_type block_a
     else
     	assert(0);
 }
+// data_cache send read request consider existence of prefetcher
+/// Read miss handler. Check MSHR hit or MSHR available
+void data_cache::send_read_request(new_addr_type addr, new_addr_type block_addr, unsigned cache_index, mem_fetch *mf,
+		unsigned time, bool &do_miss, std::list<cache_event> &events, bool read_only, bool wa){
+
+	bool wb=false;
+	evicted_block_info e;
+	send_read_request(addr, block_addr, cache_index, mf, time, do_miss, wb, e, events, read_only, wa);
+}
+
+void data_cache::send_read_request(new_addr_type addr, new_addr_type block_addr, unsigned cache_index, mem_fetch *mf,
+		unsigned time, bool &do_miss, bool &wb, evicted_block_info &evicted, std::list<cache_event> &events, bool read_only, bool wa){
+
+	new_addr_type mshr_addr = m_config.mshr_addr(mf->get_addr());
+    bool mshr_hit = m_mshrs.probe(mshr_addr);
+    bool mshr_avail = !m_mshrs.full(mshr_addr);
+    if ( mshr_hit && mshr_avail ) {
+		 if(read_only)
+			 m_tag_array->access(block_addr,time,cache_index,mf);
+		 else
+			 m_tag_array->access(block_addr,time,cache_index,wb,evicted,mf);
+		 m_mshrs.add(mshr_addr,mf);
+		 do_miss = true;
+
+    } else if ( !mshr_hit && mshr_avail && (m_miss_queue.size() < m_config.m_miss_queue_size) ) {
+		 if(read_only)
+			 m_tag_array->access(block_addr,time,cache_index,mf);
+		 else
+			 m_tag_array->access(block_addr,time,cache_index,wb,evicted,mf);
+
+		 m_mshrs.add(mshr_addr,mf);
+		 if(m_config.is_streaming() && m_config.m_cache_type == SECTOR){
+			 m_tag_array->add_pending_line(mf);
+		 }
+		 m_extra_mf_fields[mf] = extra_mf_fields(mshr_addr,mf->get_addr(),cache_index, mf->get_data_size(), m_config);
+		 mf->set_data_size( m_config.get_atom_sz() );
+		 mf->set_addr( mshr_addr );
+		 std::vector<mem_fetch*> reqs;
+		 if(m_config.m_cache_type==LARGE){
+		 	reqs = breakdown_request(mf);
+		 }
+		 else{
+			 reqs.push_back(mf);
+		 }
+		 for(unsigned ii = 0 ; ii < reqs.size() ; ii++){
+		 	mem_fetch* req = reqs[ii];
+			 if(m_have_prefetcher && !read_only){
+
+				 m_first_miss_queue.push_back(req);
+		 	}
+		 	else{
+				 m_miss_queue.push_back(req);
+		 	}
+		 
+		 	req->set_status(m_miss_queue_status,time);
+		 }
+		 if(!wa)
+			 events.push_back(cache_event(READ_REQUEST_SENT));
+
+		 do_miss = true;
+	 }
+    else if(mshr_hit && !mshr_avail)
+        m_stats.inc_fail_stats(mf->get_access_type(), MSHR_MERGE_ENRTY_FAIL);
+    else if (!mshr_hit && !mshr_avail)
+    	 m_stats.inc_fail_stats(mf->get_access_type(), MSHR_ENRTY_FAIL);
+    else
+    	assert(0);
+}
+//////////////////////////////////////////
+
 
 
 /// Sends write request to lower level memory (write or writeback)
 void data_cache::send_write_request(mem_fetch *mf, cache_event request, unsigned time, std::list<cache_event> &events){
 
-	events.push_back(request);
-    m_miss_queue.push_back(mf);
+    events.push_back(request);
+    if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
+	m_first_miss_queue.push_back(mf);
+    }
+    else{
+	m_miss_queue.push_back(mf);
+    }
     mf->set_status(m_miss_queue_status,time);
 }
 
@@ -1164,7 +1317,13 @@ cache_request_status data_cache::wr_hit_wb(new_addr_type addr, unsigned cache_in
 
 /// Write-through hit: Directly send request to lower level memory
 cache_request_status data_cache::wr_hit_wt(new_addr_type addr, unsigned cache_index, mem_fetch *mf, unsigned time, std::list<cache_event> &events, enum cache_request_status status ){
-	if(miss_queue_full(0)) {
+	if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
+		miss_queue_full_fcn = &data_cache::first_miss_queue_full;		
+	}
+	else{
+		miss_queue_full_fcn = &data_cache::miss_queue_full;
+	}
+	if((this->*data_cache::miss_queue_full_fcn)(0)) {
 		m_stats.inc_fail_stats(mf->get_access_type(), MISS_QUEUE_FULL);
 		return RESERVATION_FAIL; // cannot handle request this cycle
 	}
@@ -1182,11 +1341,16 @@ cache_request_status data_cache::wr_hit_wt(new_addr_type addr, unsigned cache_in
 
 /// Write-evict hit: Send request to lower level memory and invalidate corresponding block
 cache_request_status data_cache::wr_hit_we(new_addr_type addr, unsigned cache_index, mem_fetch *mf, unsigned time, std::list<cache_event> &events, enum cache_request_status status ){
-	if(miss_queue_full(0)) {
-		m_stats.inc_fail_stats(mf->get_access_type(), MISS_QUEUE_FULL);
-		return RESERVATION_FAIL; // cannot handle request this cycle
+	if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
+		miss_queue_full_fcn = &data_cache::first_miss_queue_full;		
 	}
-
+	else{
+		miss_queue_full_fcn = &data_cache::miss_queue_full;
+	}
+	if((this->*data_cache::miss_queue_full_fcn)(0)) {
+			m_stats.inc_fail_stats(mf->get_access_type(), MISS_QUEUE_FULL);
+			return RESERVATION_FAIL; // cannot handle request this cycle
+	}
 	// generate a write-through/evict
 	cache_block_t* block = m_tag_array->get_block(cache_index);
 	send_write_request(mf, cache_event(WRITE_REQUEST_SENT), time, events);
@@ -1223,11 +1387,17 @@ data_cache::wr_miss_wa_naive( new_addr_type addr,
     // Conservatively ensure the worst-case request can be handled this cycle
     bool mshr_hit = m_mshrs.probe(mshr_addr);
     bool mshr_avail = !m_mshrs.full(mshr_addr);
-    if(miss_queue_full(2) 
+    if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
+	miss_queue_full_fcn = &data_cache::first_miss_queue_full;
+    }
+    else{
+	miss_queue_full_fcn = &data_cache::miss_queue_full;
+    }
+    if((this->*data_cache::miss_queue_full_fcn)(2) 
         || (!(mshr_hit && mshr_avail) 
         && !(!mshr_hit && mshr_avail && (m_miss_queue.size() < m_config.m_miss_queue_size)))) {
     	//check what is the exactly the failure reason
-    	 if(miss_queue_full(2) )
+    	 if((this->*data_cache::miss_queue_full_fcn)(2) )
     		 m_stats.inc_fail_stats(mf->get_access_type(), MISS_QUEUE_FULL);
          else if(mshr_hit && !mshr_avail)
     	      m_stats.inc_fail_stats(mf->get_access_type(), MSHR_MERGE_ENRTY_FAIL);
@@ -1294,13 +1464,17 @@ data_cache::wr_miss_wa_fetch_on_write( new_addr_type addr,
 {
     new_addr_type block_addr = m_config.block_addr(addr);
     new_addr_type mshr_addr = m_config.mshr_addr(mf->get_addr());
-
-	if(mf->get_access_byte_mask().count() == m_config.get_atom_sz())
-	{
+    if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
+	miss_queue_full_fcn = &data_cache::first_miss_queue_full;
+    }
+    else{
+	miss_queue_full_fcn = &data_cache::miss_queue_full;
+    }
+    if(mf->get_access_byte_mask().count() == m_config.get_atom_sz()){
 		//if the request writes to the whole cache line/sector, then, write and set cache line Modified.
 		//and no need to send read request to memory or reserve mshr
 
-		if(miss_queue_full(0)) {
+		if((this->*data_cache::miss_queue_full_fcn)(0)) {
 			m_stats.inc_fail_stats(mf->get_access_type(), MISS_QUEUE_FULL);
 			return RESERVATION_FAIL; // cannot handle request this cycle
 		}
@@ -1331,11 +1505,11 @@ data_cache::wr_miss_wa_fetch_on_write( new_addr_type addr,
 	{
 		bool mshr_hit = m_mshrs.probe(mshr_addr);
 		bool mshr_avail = !m_mshrs.full(mshr_addr);
-		if(miss_queue_full(1)
+		if((this->*data_cache::miss_queue_full_fcn)(1)
 			|| (!(mshr_hit && mshr_avail)
 			&& !(!mshr_hit && mshr_avail && (m_miss_queue.size() < m_config.m_miss_queue_size)))) {
 			//check what is the exactly the failure reason
-			 if(miss_queue_full(1) )
+			 if((this->*data_cache::miss_queue_full_fcn)(1) )
 				 m_stats.inc_fail_stats(mf->get_access_type(), MISS_QUEUE_FULL);
 			 else if(mshr_hit && !mshr_avail)
 				  m_stats.inc_fail_stats(mf->get_access_type(), MSHR_MERGE_ENRTY_FAIL);
@@ -1412,13 +1586,17 @@ data_cache::wr_miss_wa_lazy_fetch_on_read( new_addr_type addr,
 {
 
 	    new_addr_type block_addr = m_config.block_addr(addr);
-	    new_addr_type mshr_addr = m_config.mshr_addr(mf->get_addr());
-
+	    if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
+		miss_queue_full_fcn = &data_cache::first_miss_queue_full;
+	    }
+	    else{
+		miss_queue_full_fcn = &data_cache::miss_queue_full;
+	    }
 
 		//if the request writes to the whole cache line/sector, then, write and set cache line Modified.
 		//and no need to send read request to memory or reserve mshr
 
-		if(miss_queue_full(0)) {
+		if((this->*data_cache::miss_queue_full_fcn)(0)) {
 			m_stats.inc_fail_stats(mf->get_access_type(), MISS_QUEUE_FULL);
 			return RESERVATION_FAIL; // cannot handle request this cycle
 		}
@@ -1465,7 +1643,13 @@ data_cache::wr_miss_no_wa( new_addr_type addr,
                            std::list<cache_event> &events,
                            enum cache_request_status status )
 {
-    if(miss_queue_full(0)) {
+    if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
+	miss_queue_full_fcn = &data_cache::first_miss_queue_full;
+    }
+    else{
+	miss_queue_full_fcn = &data_cache::miss_queue_full;
+    }
+    if((this->*data_cache::miss_queue_full_fcn)(0)) {
     	m_stats.inc_fail_stats(mf->get_access_type(), MISS_QUEUE_FULL);
     	return RESERVATION_FAIL; // cannot handle request this cycle
     }
@@ -1512,7 +1696,13 @@ data_cache::rd_miss_base( new_addr_type addr,
                           unsigned time,
                           std::list<cache_event> &events,
                           enum cache_request_status status ){
-    if(miss_queue_full(1)) {
+	 if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
+	 	miss_queue_full_fcn = &data_cache::first_miss_queue_full;
+	 }
+	 else{
+		 miss_queue_full_fcn = &data_cache::miss_queue_full;
+	 }
+	if((this->*data_cache::miss_queue_full_fcn)(1)) {
         // cannot handle request this cycle
         // (might need to generate two requests)
     	m_stats.inc_fail_stats(mf->get_access_type(), MISS_QUEUE_FULL);
@@ -1628,6 +1818,132 @@ data_cache::process_tag_probe( bool wr,
     m_bandwidth_management.use_data_port(mf, access_status, events); 
     return access_status;
 }
+// only data cache have prefetcher
+/// Interface for response from lower memory level (model bandwidth restictions in caller)
+void data_cache::fill(mem_fetch *mf, unsigned time){
+
+	if(m_config.m_mshr_type == SECTOR_ASSOC) {
+		assert(mf->get_original_mf());
+		extra_mf_fields_lookup::iterator e = m_extra_mf_fields.find(mf->get_original_mf());
+    	assert( e != m_extra_mf_fields.end() );
+    	e->second.pending_read--;
+
+    	if(e->second.pending_read > 0) {
+    		//wait for the other requests to come back
+    		delete mf;
+    		return;
+      } else {
+    		mem_fetch *temp = mf;
+    		mf = mf->get_original_mf();
+    		delete temp;
+      }
+	}
+
+    extra_mf_fields_lookup::iterator e = m_extra_mf_fields.find(mf);
+    assert( e != m_extra_mf_fields.end() );
+    assert( e->second.m_valid );
+    mf->set_data_size( e->second.m_data_size );
+    mf->set_addr( e->second.m_addr );
+    if ( m_config.m_alloc_policy == ON_MISS )
+        m_tag_array->fill(e->second.m_cache_index,time,mf);
+    else if ( m_config.m_alloc_policy == ON_FILL ) {
+        m_tag_array->fill(e->second.m_block_addr,time,mf);
+        if(m_config.is_streaming())
+        	m_tag_array->remove_pending_line(mf);
+    }
+    else abort();
+	 if(m_have_prefetcher){
+    	std::map<new_addr_type,unsigned>::iterator iter;
+    	iter = m_pre_map.find(mf->get_addr());
+    	if(iter!=m_pre_map.end()){
+      	  m_pre_map.erase(mf->get_addr());
+    	}
+	 }
+
+    bool has_atomic = false;
+// if prefetch request poses in mshr, remove it when corresponding address was returned
+    if(m_have_prefetcher)
+	 	m_mshrs.delete_prefetched_req_in_mshr(e->second.m_block_addr);
+// if size is not zero : at least 1 demand request is left in mshr => mark ready
+// else : erase this block
+    if( !(m_mshrs.address_list_is_empty(e->second.m_block_addr)) || !m_have_prefetcher){
+        m_mshrs.mark_ready(e->second.m_block_addr, has_atomic);
+    }
+    else{
+        m_mshrs.delete_content(e->second.m_block_addr);
+    }
+
+    if (has_atomic) {
+        assert(m_config.m_alloc_policy == ON_MISS);
+        cache_block_t* block = m_tag_array->get_block(e->second.m_cache_index);
+        block->set_status(MODIFIED, mf->get_access_sector_mask()); // mark line as dirty for atomic operation
+    }
+    m_extra_mf_fields.erase(mf);
+    m_bandwidth_management.use_fill_port(mf); 
+}
+
+// only for data cache
+void data_cache::first_pre_cycle(){
+    if(!m_first_miss_queue.empty()){
+        mem_fetch *mf = m_first_miss_queue.front();
+        if(!second_miss_queue_full(1)){
+            m_first_miss_queue.pop_front();
+            m_second_miss_queue.push_back(mf);
+        }
+    }
+}
+/// only for data cache
+void data_cache::second_pre_cycle(){
+    if(!m_second_miss_queue.empty()){
+        mem_fetch *mf = m_second_miss_queue.front();
+        if(!m_memport->full(mf->size(), mf->get_is_write())){
+            if(mf->is_prefetched()){
+                m_stats.inc_issued_prefetch();
+                m_pre_issued_map[mf->get_addr()] = mf->get_timestamp();
+            }
+            m_second_miss_queue.pop_front();
+            m_memport->push(mf);
+        }
+    }
+}
+void data_cache::pre_cycle(Prefetch_Unit * m_prefetcher, unsigned time){
+	// if use_double_cycle_access is true, it needs 2 cycle to send request to memport
+	// else if it is false, same with original function
+
+    // modified version
+    if(USE_DOUBLE_CYCLE_ACCESS){
+    	second_pre_cycle();
+		first_pre_cycle();
+    }
+    // same with original
+    else{
+    	if(!m_miss_queue.empty()){
+    	    mem_fetch *mf = m_miss_queue.front();
+    	    if(!m_memport->full(mf->size(), mf->get_is_write())){
+    	        if(mf->is_prefetched()){
+    	            m_stats.inc_issued_prefetch();
+    	            m_pre_issued_map[mf->get_addr()] = mf->get_timestamp();
+    	        }
+    	        m_miss_queue.pop_front();
+    	        m_memport->push(mf);
+    	    }
+    	}
+	}
+
+
+    bool data_port_busy = !m_bandwidth_management.data_port_free();
+    bool fill_port_busy = !m_bandwidth_management.fill_port_free();
+    m_stats.sample_cache_port_utility(data_port_busy, fill_port_busy);
+    m_bandwidth_management.replenish_port_bandwidth();
+}
+
+
+
+
+
+
+
+///////////////////////////////////////////////////
 
 // Both the L1 and L2 currently use the same access function.
 // Differentiation between the two caches is done through configuration
@@ -1650,11 +1966,93 @@ data_cache::access( new_addr_type addr,
     enum cache_request_status access_status
         = process_tag_probe( wr, probe_status, addr, cache_index, mf, time, events );
     m_stats.inc_stats(mf->get_access_type(),
-        m_stats.select_stats_status(probe_status, access_status));
+    m_stats.select_stats_status(probe_status, access_status));
+
+    if(access_status == HIT || access_status == HIT_RESERVED){
+	if(m_pre_issued_map.count(mf->get_addr())){
+	    m_stats.inc_num_prefetched();// measure need of prefetched block
+	}
+    }
+
+    if(access_status == HIT){
+	if(m_tag_array->get_block(cache_index)->m_prefetched && !(m_tag_array->get_block(cache_index)->m_accessed)){// if first hit to prefetched block
+	    m_tag_array->get_block(cache_index)->m_accessed=true; // set flag
+	    double pre_dist = time - m_pre_issued_map[mf->get_addr()]; 
+	    m_stats.inc_prefetch_distance(pre_dist);//  record distance
+	    m_stats.inc_num_prefetch_hit();// increase number of hit
+	}
+    }
+    else if(access_status == HIT_RESERVED){
+    	 if(m_pre_map.count(mf->get_addr())){// prefetch request is on the fly
+		 if(!(m_tag_array->get_block(cache_index)->m_loaded_check)){
+		     m_tag_array->get_block(cache_index)->m_loaded_check=true;
+	             unsigned late_dist = time - m_pre_map[mf->get_addr()];
+        	     m_stats.inc_late_dist(late_dist);
+		     m_stats.inc_num_rh_prefetch();
+            	     if(late_dist<dist_min){
+        		dist_min = late_dist;
+        	     }
+        	     else if(late_dist>dist_max){
+        		 dist_max = late_dist;
+        	     }
+             	     dist_coll.push_back(late_dist);
+         	}
+    	 }
+    }
     m_stats.inc_stats_pw(mf->get_access_type(),
         m_stats.select_stats_status(probe_status, access_status));
     return access_status;
 }
+
+enum cache_request_status
+data_cache::pre_access( new_addr_type addr,
+                    mem_fetch *mf,
+                    unsigned time,
+                    std::list<cache_event> &events )
+{
+
+    assert( mf->get_data_size() <= m_config.get_line_sz());
+    bool wr = mf->get_is_write();
+    new_addr_type block_addr = m_config.block_addr(addr);
+    unsigned cache_index = (unsigned)-1;
+    enum cache_request_status probe_status
+        = m_tag_array->probe( block_addr, cache_index, mf);
+
+
+    assert (mf->is_prefetched());
+    enum cache_request_status access_status
+        = process_tag_probe( wr, probe_status, addr, cache_index, mf, time, events );
+    if(probe_status==MISS){
+        m_pre_map[mf->get_addr()] = mf->get_timestamp();
+    }
+  	 return access_status;
+}
+
+// added by capp : large cacheline
+std::vector<mem_fetch*> data_cache::breakdown_request(mem_fetch* mf){
+	std::vector<mem_fetch*> result;
+	for(unsigned ii = 0 ; ii < m_config.get_line_sz()/SECTOR_SIZE ; ii++){
+		const mem_access_t *ma = new  mem_access_t( mf->get_access_type(),
+				mf->get_addr() + SECTOR_SIZE*ii,
+				SECTOR_SIZE,
+				mf->is_write()
+				);
+		mem_fetch *n_mf = new mem_fetch( *ma,
+				NULL,
+				mf->get_ctrl_size(),
+				mf->get_wid(),
+				mf->get_sid(),
+				mf->get_tpc(),
+				mf->get_mem_config(),
+				mf);
+
+			 result.push_back(n_mf);
+
+	}
+	return result;
+
+}
+
 
 /// This is meant to model the first level data cache in Fermi.
 /// It is write-evict (global) or write-back (local) at the
@@ -1666,7 +2064,18 @@ l1_cache::access( new_addr_type addr,
                   unsigned time,
                   std::list<cache_event> &events )
 {
+    mf->set_approx();
     return data_cache::access( addr, mf, time, events );
+}
+
+enum cache_request_status 
+l1_cache::pre_access( new_addr_type addr, 
+		      mem_fetch *mf,
+		      unsigned time,
+		      std::list<cache_event> &events )
+{
+	mf->set_approx();
+	return data_cache::pre_access(addr, mf, time, events);
 }
 
 // The l2 cache access function calls the base data_cache access
@@ -1679,6 +2088,15 @@ l2_cache::access( new_addr_type addr,
                   std::list<cache_event> &events )
 {
     return data_cache::access( addr, mf, time, events );
+}
+
+enum cache_request_status 
+l2_cache::pre_access( new_addr_type addr, 
+			mem_fetch *mf,
+			unsigned time,
+			std::list<cache_event> &events )
+{
+	return data_cache::pre_access(addr, mf, time, events);
 }
 
 /// Access function for tex_cache

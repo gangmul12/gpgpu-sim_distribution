@@ -37,7 +37,7 @@
 
 #include "addrdec.h"
 #include <iostream>
-
+#include "prefetcher.h"
 #define MAX_DEFAULT_CACHE_SIZE_MULTIBLIER 4
 
 enum cache_block_state {
@@ -106,6 +106,9 @@ struct cache_block_t {
     {
         m_tag=0;
         m_block_addr=0;
+        m_prefetched=false;
+        m_accessed = false;
+        m_loaded_check = false;
     }
 
     virtual void allocate( new_addr_type tag, new_addr_type block_addr, unsigned time, mem_access_sector_mask_t sector_mask) = 0;
@@ -133,6 +136,9 @@ struct cache_block_t {
 
     new_addr_type    m_tag;
     new_addr_type    m_block_addr;
+    bool m_prefetched;
+    bool m_accessed;
+    bool m_loaded_check;
 
 };
 
@@ -157,6 +163,9 @@ struct line_cache_block: public cache_block_t  {
 	        m_status=RESERVED;
 	        m_ignore_on_fill_status = false;
 	        m_set_modified_on_fill = false;
+        m_prefetched=false;
+        m_accessed = false;
+        m_loaded_check = false;
 	    }
 		void fill( unsigned time, mem_access_sector_mask_t sector_mask )
 	    {
@@ -286,6 +295,9 @@ struct sector_cache_block : public cache_block_t {
 		m_line_alloc_time=time;   //only set this for the first allocated sector
 		m_line_last_access_time=time;
 		m_line_fill_time=0;
+		m_prefetched=false;
+		m_accessed = false;
+      		m_loaded_check = false;
 	}
 
     void allocate_sector(unsigned time, mem_access_sector_mask_t sector_mask )
@@ -486,7 +498,8 @@ enum set_index_function{
 
 enum cache_type{
     NORMAL = 0,
-    SECTOR
+    SECTOR,
+    LARGE
 };
 
 #define MAX_WARP_PER_SHADER 64
@@ -507,6 +520,8 @@ public:
         m_data_port_width = 0;
         m_set_index_function = LINEAR_SET_FUNCTION;
         m_is_streaming = false;
+	have_prefetcher = false;
+	m_fill_port_width = 0;
     }
     void init(char * config, FuncCache status)
     {
@@ -514,13 +529,11 @@ public:
         assert( config );
         char ct, rp, wp, ap, mshr_type, wap, sif;
 
-
-        int ntok = sscanf(config,"%c:%u:%u:%u,%c:%c:%c:%c:%c,%c:%u:%u,%u:%u,%u",
+        int ntok = sscanf(config,"%c:%u:%u:%u,%c:%c:%c:%c:%c,%c:%u:%u,%u:%u,%u:%u",
                           &ct, &m_nset, &m_line_sz, &m_assoc, &rp, &wp, &ap, &wap,
                           &sif,&mshr_type,&m_mshr_entries,&m_mshr_max_merge,
                           &m_miss_queue_size, &m_result_fifo_entries,
-                          &m_data_port_width);
-
+                          &m_data_port_width, &m_fill_port_width);
         if ( ntok < 12 ) {
             if ( !strcmp(config,"none") ) {
                 m_disabled = true;
@@ -532,8 +545,10 @@ public:
         switch (ct) {
 			   case 'N': m_cache_type = NORMAL; break;
 			   case 'S': m_cache_type = SECTOR; break;
+			   case 'L': m_cache_type = LARGE; break;
 			   default: exit_parse_error();
         }
+	if(m_cache_type == LARGE) assert(mshr_type=='S');
         switch (rp) {
                case 'L': m_replacement_policy = LRU; break;
                case 'F': m_replacement_policy = FIFO; break;
@@ -625,7 +640,10 @@ public:
             m_data_port_width = m_line_sz; 
         }
         assert(m_line_sz % m_data_port_width == 0); 
-
+	if (m_fill_port_width == 0){
+	    m_fill_port_width = m_data_port_width;
+	}
+	assert(m_line_sz % m_fill_port_width == 0);
         switch(sif){
         case 'H': m_set_index_function = FERMI_HASH_SET_FUNCTION; break;
         case 'P': m_set_index_function = HASH_IPOLY_FUNCTION; break;
@@ -718,7 +736,7 @@ public:
     char *m_config_stringPrefL1;
     char *m_config_stringPrefShared;
     FuncCache cache_status;
-
+    bool have_prefetcher;
 protected:
     void exit_parse_error()
     {
@@ -759,6 +777,7 @@ protected:
     };
     unsigned m_result_fifo_entries;
     unsigned m_data_port_width; //< number of byte the cache can access per cycle 
+    unsigned m_fill_port_width;
     enum set_index_function m_set_index_function; // Hash, linear, or custom set index function
 
     friend class tag_array;
@@ -802,6 +821,7 @@ public:
     void fill( new_addr_type addr, unsigned time, mem_fetch* mf );
     void fill( unsigned idx, unsigned time, mem_fetch* mf );
     void fill( new_addr_type addr, unsigned time, mem_access_sector_mask_t mask );
+    void fill( new_addr_type addr, unsigned time, mem_access_sector_mask_t mask, bool is_prefetched );
 
     unsigned size() const { return m_config.get_num_lines();}
     cache_block_t* get_block(unsigned idx) { return m_lines[idx];}
@@ -862,7 +882,16 @@ public:
     ,m_data(2*num_entries)
 #endif
     {
+	m_have_prefetcher = false;
     }
+
+    bool address_list_is_empty(new_addr_type block_addr){
+        table::const_iterator i=m_data.find(block_addr);
+        assert(i != m_data.end());
+
+        return i->second.m_list.empty();
+    }
+    void set_prefetch(){m_have_prefetcher=true;}
 
     /// Checks if there is a pending request to the lower memory level already
     bool probe( new_addr_type block_addr ) const;
@@ -874,6 +903,13 @@ public:
     bool busy() const {return false;}
     /// Accept a new cache fill response: mark entry ready for processing
     void mark_ready( new_addr_type block_addr, bool &has_atomic );
+    void mark_ready_prefetch( new_addr_type block_addr, bool &has_atomic );
+    void delete_content( new_addr_type block_addr );
+    bool mshr_content_is_prefetched(mem_fetch* mf){
+        return mf->is_prefetched();
+    }
+    void delete_prefetched_req_in_mshr( new_addr_type block_addr );
+
     /// Returns true if ready accesses exist
     bool access_ready() const {return !m_current_response.empty();}
     /// Returns next ready access
@@ -907,6 +943,9 @@ private:
     // it may take several cycles to process the merged requests
     bool m_current_response_ready;
     std::list<new_addr_type> m_current_response;
+
+	 bool m_have_prefetcher;
+
 };
 
 
@@ -923,6 +962,14 @@ struct cache_sub_stats{
     unsigned long long port_available_cycles; 
     unsigned long long data_port_busy_cycles; 
     unsigned long long fill_port_busy_cycles; 
+    unsigned prefetch_stall_cycle;
+    unsigned n_prefetch_access;
+    unsigned n_prefetch_hit;
+    unsigned n_issued_prefetch;
+    unsigned n_prefetch_distance;
+    unsigned n_prefetch_reserved_hit;
+    unsigned n_prefetch_accessed_once;
+    unsigned n_late_distance;
 
     cache_sub_stats(){
         clear();
@@ -934,7 +981,15 @@ struct cache_sub_stats{
         res_fails = 0;
         port_available_cycles = 0; 
         data_port_busy_cycles = 0; 
-        fill_port_busy_cycles = 0; 
+        fill_port_busy_cycles = 0;
+        prefetch_stall_cycle =0;
+        n_prefetch_access=0;
+        n_prefetch_hit=0;
+        n_issued_prefetch=0;
+        n_prefetch_distance=0;
+        n_prefetch_reserved_hit=0;
+        n_prefetch_accessed_once=0;
+        n_late_distance=0;
     }
     cache_sub_stats &operator+=(const cache_sub_stats &css){
         ///
@@ -947,7 +1002,15 @@ struct cache_sub_stats{
         port_available_cycles += css.port_available_cycles; 
         data_port_busy_cycles += css.data_port_busy_cycles; 
         fill_port_busy_cycles += css.fill_port_busy_cycles; 
-        return *this;
+        prefetch_stall_cycle += css.prefetch_stall_cycle;
+        n_prefetch_access += css.n_prefetch_access;
+        n_prefetch_hit += css.n_prefetch_hit;
+        n_issued_prefetch += css.n_issued_prefetch;
+        n_prefetch_distance += css.n_prefetch_distance;
+        n_prefetch_reserved_hit += css.n_prefetch_reserved_hit;
+        n_prefetch_accessed_once += css.n_prefetch_accessed_once;
+        n_late_distance += css.n_late_distance;
+	return *this;
     }
 
     cache_sub_stats operator+(const cache_sub_stats &cs){
@@ -962,7 +1025,15 @@ struct cache_sub_stats{
         ret.port_available_cycles = port_available_cycles + cs.port_available_cycles; 
         ret.data_port_busy_cycles = data_port_busy_cycles + cs.data_port_busy_cycles; 
         ret.fill_port_busy_cycles = fill_port_busy_cycles + cs.fill_port_busy_cycles; 
-        return ret;
+	ret.prefetch_stall_cycle = prefetch_stall_cycle + cs.prefetch_stall_cycle;
+        ret.n_prefetch_access = n_prefetch_access + cs.n_prefetch_access;
+        ret.n_prefetch_hit = n_prefetch_hit + cs.n_prefetch_hit;
+        ret.n_issued_prefetch = n_issued_prefetch + cs.n_issued_prefetch;
+        ret.n_prefetch_distance = n_prefetch_distance + cs.n_prefetch_distance;
+        ret.n_prefetch_reserved_hit = n_prefetch_reserved_hit+ cs.n_prefetch_reserved_hit;
+        ret.n_prefetch_accessed_once = n_prefetch_accessed_once+ cs.n_prefetch_accessed_once;
+        ret.n_late_distance = n_late_distance + cs.n_late_distance;
+	return ret;
     }
 
     void print_port_stats(FILE *fout, const char *cache_name) const; 
@@ -1058,7 +1129,15 @@ public:
     // Get per-window cache stats for AerialVision
     void get_sub_stats_pw(struct cache_sub_stats_pw &css) const;
 
-    void sample_cache_port_utility(bool data_port_busy, bool fill_port_busy); 
+    void sample_cache_port_utility(bool data_port_busy, bool fill_port_busy);
+    void inc_num_prefetched(){ m_n_prefetch_access++;};
+    void inc_num_prefetch_hit(){ m_n_prefetch_hit++; };
+    void inc_prefetch_stall_cycle(unsigned time){m_prefetch_stall_cycle += time;};
+    void inc_issued_prefetch(){ m_n_issued_prefetch++; };
+    void inc_prefetch_distance(unsigned time){ m_n_prefetch_distance += time; };
+    void inc_num_rh_prefetch(){ m_n_prefetch_reserved_hit++; };
+    void inc_num_accessed_once(){ m_n_prefetch_accessed_once++; };
+    void inc_late_dist(unsigned time){ m_n_late_distance+=time; };
 private:
     bool check_valid(int type, int status) const;
     bool check_fail_valid(int type, int fail) const;
@@ -1071,7 +1150,15 @@ private:
 
     unsigned long long m_cache_port_available_cycles; 
     unsigned long long m_cache_data_port_busy_cycles; 
-    unsigned long long m_cache_fill_port_busy_cycles; 
+    unsigned long long m_cache_fill_port_busy_cycles;
+    unsigned m_prefetch_stall_cycle;
+    unsigned m_n_prefetch_access;
+    unsigned m_n_prefetch_hit;
+    unsigned m_n_issued_prefetch;
+    unsigned m_n_prefetch_distance;
+    unsigned m_n_prefetch_reserved_hit;
+    unsigned m_n_prefetch_accessed_once;
+    unsigned m_n_late_distance;
 };
 
 class cache_t {
@@ -1171,7 +1258,7 @@ public:
     // something is read or written without doing anything else.
     void force_tag_access( new_addr_type addr, unsigned time, mem_access_sector_mask_t mask )
     {
-        m_tag_array->fill( addr, time, mask );
+        m_tag_array->fill( addr, time, mask, false );
     }
 
 protected:
@@ -1296,6 +1383,7 @@ public:
         init( mfcreator );
         m_wr_alloc_type = wr_alloc_type;
         m_wrbk_type = wrbk_type;
+	m_have_prefetcher=false;
     }
 
     virtual ~data_cache() {}
@@ -1337,12 +1425,38 @@ public:
             assert(0 && "Error: Must set valid cache write miss policy\n");
             break; // Need to set a write miss function
         }
+        bin_num = 12;
+        bin_size =256;
+        dist_max = 1;
+        dist_min = 256;
+
     }
 
     virtual enum cache_request_status access( new_addr_type addr,
                                               mem_fetch *mf,
                                               unsigned time,
                                               std::list<cache_event> &events );
+    void first_pre_cycle();
+    void second_pre_cycle();
+    void pre_cycle(Prefetch_Unit* m_prefetcher, unsigned time);
+    virtual void fill(mem_fetch* mf, unsigned time);
+
+    std::map<new_addr_type , unsigned > m_pre_issued_map;
+    std::map<new_addr_type , unsigned > m_pre_map;
+ 
+    virtual enum cache_request_status pre_access( new_addr_type addr, mem_fetch *mf, unsigned time, std::list<cache_event> &events ) =  0;
+	 std::vector<unsigned> get_dist_coll(){
+    	return dist_coll;
+    }
+    unsigned get_max_dist(){return dist_max;}
+    unsigned get_min_dist(){return dist_min;}
+    unsigned get_dist_size(){return dist_coll.size();}
+    void set_prefetch(){
+	m_have_prefetcher = true;
+	m_mshrs.set_prefetch();
+    }
+    std::vector<mem_fetch*> breakdown_request(mem_fetch* mf);
+
 protected:
     data_cache( const char *name,
                 cache_config &config,
@@ -1378,6 +1492,39 @@ protected:
 
 protected:
     mem_fetch_allocator *m_memfetch_creator;
+    bool m_have_prefetcher;
+
+    // for first_pre_cycle && second_pre_cycle
+    std::list<mem_fetch*> m_first_miss_queue;
+    std::list<mem_fetch*> m_second_miss_queue;
+	 bool (data_cache::*miss_queue_full_fcn)(unsigned);
+    bool first_miss_queue_full(unsigned num_miss){
+          return ( (m_first_miss_queue.size()+num_miss) >= 2*m_config.m_miss_queue_size );
+    }
+
+    bool second_miss_queue_full(unsigned num_miss){
+          return ( (m_second_miss_queue.size()+num_miss) >= 2*m_config.m_miss_queue_size );
+    }
+    void prefetch_send_read_request(new_addr_type addr, new_addr_type block_addr, unsigned cache_index, mem_fetch *mf,
+            unsigned time, bool &do_miss, bool &wb, cache_block_t &evicted, std::list<cache_event> &events, bool read_only, bool wa);
+
+    std::vector<unsigned> dist_coll; //only collect num of data. Does not contain data itself.
+    unsigned bin_num;	//12
+    unsigned bin_size;	//256 or (max-min)/bin_num
+    unsigned dist_max;	//256
+    unsigned dist_min;	//256
+    //void make_hist();
+    
+/// Read miss handler without writeback
+    void send_read_request(new_addr_type addr, new_addr_type block_addr, unsigned cache_index, mem_fetch *mf,
+    		unsigned time, bool &do_miss, std::list<cache_event> &events, bool read_only, bool wa);
+    /// Read miss handler. Check MSHR hit or MSHR available
+    void send_read_request(new_addr_type addr, new_addr_type block_addr, unsigned cache_index, mem_fetch *mf,
+    		unsigned time, bool &do_miss, bool &wb, evicted_block_info &evicted, std::list<cache_event> &events, bool read_only, bool wa);
+
+
+
+/////////////////////////////////////////////////////
 
     // Functions for data cache access
     /// Sends write request to lower level memory (write or writeback)
@@ -1520,7 +1667,11 @@ public:
     l1_cache(const char *name, cache_config &config,
             int core_id, int type_id, mem_fetch_interface *memport,
             mem_fetch_allocator *mfcreator, enum mem_fetch_status status )
-            : data_cache(name,config,core_id,type_id,memport,mfcreator,status, L1_WR_ALLOC_R, L1_WRBK_ACC){}
+            : data_cache(name,config,core_id,type_id,memport,mfcreator,status, L1_WR_ALLOC_R, L1_WRBK_ACC)
+	 {
+		 if(config.have_prefetcher)
+			 set_prefetch();
+	 }
 
     virtual ~l1_cache(){}
 
@@ -1529,7 +1680,7 @@ public:
                 mem_fetch *mf,
                 unsigned time,
                 std::list<cache_event> &events );
-
+    virtual enum cache_request_status pre_access( new_addr_type addr, mem_fetch *mf, unsigned time, std::list<cache_event> &events );
 protected:
     l1_cache( const char *name,
               cache_config &config,
@@ -1561,6 +1712,9 @@ public:
                 mem_fetch *mf,
                 unsigned time,
                 std::list<cache_event> &events );
+    virtual enum cache_request_status pre_access( new_addr_type addr, mem_fetch *mf, unsigned time, std::list<cache_event> &events );
+ 
+
 };
 
 /*****************************************************************************/

@@ -970,6 +970,7 @@ public:
         m_cache_hit=false;
         m_is_printf=false;
         m_is_cdp = 0;
+	m_cta_id = (unsigned)-1;
     }
     virtual ~warp_inst_t(){
     }
@@ -995,6 +996,23 @@ public:
         m_empty=false;
         m_scheduler_id=sch_id;
     }
+	 void issue( const active_mask_t &mask, unsigned warp_id, unsigned long long cycle, int dynamic_warp_id, int sch_id, unsigned cta_id )
+    {
+        m_warp_active_mask = mask;
+        m_warp_issued_mask = mask; 
+        m_uid = ++sm_next_uid;
+        m_warp_id = warp_id;
+        m_dynamic_warp_id = dynamic_warp_id;
+        issue_cycle = cycle;
+        cycles = initiation_interval;
+        m_cache_hit=false;
+        m_empty=false;
+        m_scheduler_id=sch_id;
+		  m_cta_id = cta_id;
+    }
+
+
+
     const active_mask_t & get_active_mask() const
     {
     	return m_warp_active_mask;
@@ -1111,7 +1129,7 @@ public:
 
     bool accessq_empty() const { return m_accessq.empty(); }
     unsigned accessq_count() const { return m_accessq.size(); }
-    const mem_access_t &accessq_back() { return m_accessq.back(); }
+    const mem_access_t &accessq_back() const { return m_accessq.back(); }
     void accessq_pop_back() { m_accessq.pop_back(); }
 
     bool dispatch_delay()
@@ -1128,6 +1146,9 @@ public:
     void print( FILE *fout ) const;
     unsigned get_uid() const { return m_uid; }
     unsigned get_schd_id() const { return m_scheduler_id; }
+    void set_cta_id(unsigned cid){m_cta_id = cid;}
+    unsigned get_cta_id() const {return m_cta_id;}
+//////////////////////////
 
 
 protected:
@@ -1144,6 +1165,7 @@ protected:
     const core_config *m_config; 
     active_mask_t m_warp_active_mask; // dynamic active mask for timing model (after predication)
     active_mask_t m_warp_issued_mask; // active mask at issue (prior to predication test) -- for instruction counting
+    unsigned m_cta_id;
 
     struct per_thread_info {
         per_thread_info() {
@@ -1182,7 +1204,6 @@ public:
 
     void load_global_mem(class memory_space *temp_mem, char * f1name);
     void store_global_mem(class memory_space *mem, char * fname , char * format);
-//	 class memory_space* generate_patch(class memory_space_impl* new_mem, class memory_space_impl* old_mem);
     unsigned radnom;
 
 

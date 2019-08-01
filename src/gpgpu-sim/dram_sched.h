@@ -34,6 +34,7 @@
 #include "gpu-misc.h"
 #include <list>
 #include <map>
+#include "mem_fetch.h"
 
 enum memory_mode {
    READ_MODE = 0,
@@ -69,4 +70,30 @@ private:
    memory_stats_t *m_stats;
 };
 
+
+class approx_scheduler{
+	public:
+		approx_scheduler(const memory_config *config, dram_t *dm, memory_stats_t *stats);
+		void add_req(dram_req_t *req);
+		dram_req_t* next_mrq();
+		dram_req_t * schedule(unsigned bank, unsigned curr_row);
+		void print(FILE *fp);
+		mem_fetch* process_return_cmd(dram_req_t* cmd);	
+		unsigned num_pending() const ;
+		bool slot_available() const ;
+
+	private:
+		const memory_config *m_config;
+		dram_t *m_dram;
+		unsigned m_num_pending;
+		std::list<dram_req_t*> *m_queue;
+		unsigned m_row_sense;
+		unsigned m_nrow_per_bank_for_full;	
+		memory_stats_t *m_stats;
+		unsigned m_precision;
+		unsigned m_linesize;
+		
+		dram_req_t* m_current_req[2];// 2 for double buffer
+		std::vector<bool> m_flag_subreq_done[2];
+};
 #endif
