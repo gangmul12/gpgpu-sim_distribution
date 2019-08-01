@@ -134,6 +134,13 @@ void gpgpu_functional_sim_config::reg_options(class OptionParser * opp)
   option_parser_register(opp, "-checkpoint_CTA", OPT_INT32, &checkpoint_CTA, 
                " checkpointing after # of CTA (< less than total CTA)",
                "0");
+  option_parser_register(opp, "-skip_option", OPT_INT32, &skip_option, 
+               " skip flag (0 = no skip)",
+               "0");
+  option_parser_register(opp, "-skip_kernel", OPT_INT32, &skip_kernel, 
+               " skip until which kernel (1= 1st kernel)",
+               "0");
+
   option_parser_register(opp, "-resume_option", OPT_INT32, &resume_option, 
                " resume flag (0 = no resume)",
                "0");
@@ -188,7 +195,9 @@ gpgpu_t::gpgpu_t( const gpgpu_functional_sim_config &config )
    checkpoint_kernel = m_function_model_config.get_checkpoint_kernel();
    checkpoint_CTA = m_function_model_config.get_checkpoint_CTA();
    resume_option = m_function_model_config.get_resume_option();
-   resume_kernel = m_function_model_config.get_resume_kernel();
+   skip_option = m_function_model_config.get_skip_option();
+	resume_kernel = m_function_model_config.get_resume_kernel();
+	skip_kernel = m_function_model_config.get_skip_kernel();
    resume_CTA = m_function_model_config.get_resume_CTA();
    checkpoint_CTA_t = m_function_model_config.get_checkpoint_CTA_t();
    checkpoint_insn_Y = m_function_model_config.get_checkpoint_insn_Y();

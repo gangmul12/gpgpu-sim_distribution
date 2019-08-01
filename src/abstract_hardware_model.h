@@ -535,6 +535,8 @@ public:
     int get_checkpoint_CTA() const {return checkpoint_CTA; }
     int get_resume_option() const {return resume_option; }
     int get_resume_kernel() const {return resume_kernel; }
+	 int get_skip_option() const {return skip_option; }
+	 int get_skip_kernel() const {return skip_kernel; }
     int get_resume_CTA() const {return resume_CTA; }
     int get_checkpoint_CTA_t() const {return checkpoint_CTA_t; }
     int get_checkpoint_insn_Y() const {return checkpoint_insn_Y; }
@@ -549,6 +551,8 @@ private:
     int checkpoint_CTA;
     int resume_option;
     int resume_kernel;
+	 int skip_option;
+	 int skip_kernel;
     int resume_CTA;
     int checkpoint_CTA_t;
     int checkpoint_insn_Y;
@@ -566,6 +570,8 @@ public:
     int checkpoint_option;
     int checkpoint_kernel;
     int checkpoint_CTA;
+	 int skip_option;
+	 int skip_kernel;
     int resume_option;
     int resume_kernel;
     int resume_CTA;

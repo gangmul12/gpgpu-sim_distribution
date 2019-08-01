@@ -1537,7 +1537,12 @@ __host__ cudaError_t CUDARTAPI cudaLaunch( const char *hostFun )
 		for (int i=0;i<gpu->resume_CTA;i++)
 			grid->increment_cta_id();
 	}
-	if(gpu->resume_option==1 && (grid->get_uid()<gpu->resume_kernel) && kernel_func_info)
+	if(gpu->skip_option==1 && (grid->get_uid()<gpu->skip_kernel) && kernel_func_info){
+		printf("Skipping kernel %d as resuming from kernel %d\n",grid->get_uid(),gpu->resume_kernel );
+		g_cuda_launch_stack.pop_back();
+		return g_last_cudaError = cudaSuccess;
+	}
+	else if(gpu->resume_option==1 && (grid->get_uid()<gpu->resume_kernel) && kernel_func_info)
 	{
 		char f1name[2048];
 		int last_kernel = grid->get_uid();
