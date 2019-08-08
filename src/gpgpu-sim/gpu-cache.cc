@@ -2035,7 +2035,10 @@ std::vector<mem_fetch*> data_cache::breakdown_request(mem_fetch* mf){
 		const mem_access_t *ma = new  mem_access_t( mf->get_access_type(),
 				mf->get_addr() + SECTOR_SIZE*ii,
 				SECTOR_SIZE,
-				mf->is_write()
+				mf->is_write(),
+				mf->get_access_warp_mask(),
+				mf->get_access_byte_mask(),
+				mem_access_sector_mask_t().set(0)	
 				);
 		mem_fetch *n_mf = new mem_fetch( *ma,
 				NULL,
