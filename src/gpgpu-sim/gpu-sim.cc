@@ -267,6 +267,9 @@ void shader_core_config::reg_options(class OptionParser * opp)
     option_parser_register(opp, "-smem_latency", OPT_UINT32, &smem_latency,
                  "smem Latency",
                  "3");
+	 option_parser_register(opp, "-fetch_mask", OPT_UINT32, &m_L1D_config.fetch_mask,
+			 			"fetch mask in uint for large cacheline",
+						"4294967295");
     option_parser_register(opp, "-l1_prefetcher", OPT_BOOL, &m_L1D_config.have_prefetcher,
 		"L1 prefetcher",
 		"0");

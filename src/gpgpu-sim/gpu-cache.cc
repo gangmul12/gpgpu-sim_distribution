@@ -1257,6 +1257,7 @@ void data_cache::send_read_request(new_addr_type addr, new_addr_type block_addr,
 		 std::vector<mem_fetch*> reqs;
 		 if(m_config.m_cache_type==LARGE){
 		 	reqs = breakdown_request(mf);
+			m_extra_mf_fields[mf].pending_read = reqs.size();
 		 }
 		 else{
 			 reqs.push_back(mf);
@@ -1828,7 +1829,7 @@ void data_cache::fill(mem_fetch *mf, unsigned time){
     	assert( e != m_extra_mf_fields.end() );
     	e->second.pending_read--;
 
-    	if(e->second.pending_read > 0) {
+	if(e->second.pending_read > 0) {
     		//wait for the other requests to come back
     		delete mf;
     		return;
@@ -2032,6 +2033,9 @@ data_cache::pre_access( new_addr_type addr,
 std::vector<mem_fetch*> data_cache::breakdown_request(mem_fetch* mf){
 	std::vector<mem_fetch*> result;
 	for(unsigned ii = 0 ; ii < m_config.get_line_sz()/SECTOR_SIZE ; ii++){
+		bool do_fetch = (m_config.fetch_mask >> ii & 1) == 1;
+		if(! do_fetch)
+			continue;
 		const mem_access_t *ma = new  mem_access_t( mf->get_access_type(),
 				mf->get_addr() + SECTOR_SIZE*ii,
 				SECTOR_SIZE,

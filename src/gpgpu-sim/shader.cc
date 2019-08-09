@@ -2507,11 +2507,11 @@ void ldst_unit::cycle()
     	   if( mf->get_type() == WRITE_ACK || ( m_config->gpgpu_perfect_mem && mf->get_is_write() )) {
 // TODO : fix it
                if(m_config->m_L1D_config.get_mshr_type()==SECTOR_ASSOC){
-		   for(unsigned ii=0; ii < mf->get_data_size()/SECTOR_SIZE; ii++){
-			m_core->store_ack(mf);
-		   }
-	       }
-	       else m_core->store_ack(mf);
+                   for(unsigned ii=0; ii < mf->get_data_size()/SECTOR_SIZE; ii++){
+                       m_core->store_ack(mf);
+                   }
+               }
+               else m_core->store_ack(mf);
                m_response_fifo.pop_front();
                delete mf;
            } else {

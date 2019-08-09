@@ -737,6 +737,7 @@ public:
     char *m_config_stringPrefShared;
     FuncCache cache_status;
     bool have_prefetcher;
+	 unsigned fetch_mask;
 protected:
     void exit_parse_error()
     {
@@ -1473,6 +1474,7 @@ protected:
         init( mfcreator );
         m_wr_alloc_type = wr_alloc_type;
         m_wrbk_type = wrbk_type;
+		  fetch_mask = -1;
     }
 
     mem_access_type m_wr_alloc_type; // Specifies type of write allocate request (e.g., L1 or L2)
@@ -1513,6 +1515,7 @@ protected:
     unsigned bin_size;	//256 or (max-min)/bin_num
     unsigned dist_max;	//256
     unsigned dist_min;	//256
+	 unsigned fetch_mask;
     //void make_hist();
     
 /// Read miss handler without writeback
@@ -1671,6 +1674,8 @@ public:
 	 {
 		 if(config.have_prefetcher)
 			 set_prefetch();
+		 fetch_mask = config.fetch_mask;
+		 assert(fetch_mask !=0 && "fetch mask should be larger than 0");
 	 }
 
     virtual ~l1_cache(){}
