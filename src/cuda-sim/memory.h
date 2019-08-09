@@ -141,6 +141,8 @@ private:
 	mem_map<mem_addr_t, size_t> m_zero_size_alloc;
 	mem_meta_t m_free;
 	std::map<unsigned,mem_addr_t> m_watchpoints;
+	unsigned long long m_sizeof_alloc_sim;
+	unsigned long long m_sizeof_free_sim;
 
 };
 

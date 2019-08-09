@@ -43,6 +43,9 @@ template<unsigned BSIZE> memory_space_impl<BSIZE>::memory_space_impl( std::strin
       }
    }
    assert( m_log2_block_size != (unsigned)-1 );
+
+	m_sizeof_free_sim=0;
+	m_sizeof_alloc_sim=0;
 }
 
 template<unsigned BSIZE> void memory_space_impl<BSIZE>::write_only( mem_addr_t offset, mem_addr_t index, size_t length, const void *data)
@@ -217,6 +220,8 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::alloc(mem_addr_t addr, s
 	auto i = m_alloc.insert(std::make_pair(addr, length));
 	assert(i.second==true);
 	assert(++(i.first) == m_alloc.end() && "allocation should be the last part");
+	m_sizeof_alloc_sim += length;
+	printf("malloc sim total : %lluB\n", m_sizeof_alloc_sim);
 }
 template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
 	if(m_zero_size_alloc.count(addr)){
@@ -230,6 +235,8 @@ template<unsigned BSIZE> void memory_space_impl<BSIZE>::free(mem_addr_t addr){
 	assert(m_alloc.count(addr)!=0 && "try to free unallocated region");
 	size_t length = m_alloc[addr];
 	size_t ret = m_alloc.erase(addr);
+	m_sizeof_free_sim += length;
+	printf("free sim total : %lluB\n", m_sizeof_free_sim);
 	mem_meta_t::iterator i = m_free.insert(std::make_pair(addr, length)).first;
 	if(i != m_free.begin()){
 		mem_meta_t::iterator prev = std::prev(i);
