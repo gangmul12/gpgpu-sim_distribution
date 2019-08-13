@@ -65,7 +65,10 @@ public:
 
    // accessors
    void addrdec_tlx(new_addr_type addr, addrdec_t *tlx) const;
-   new_addr_type partition_address( new_addr_type addr ) const;
+	new_addr_type raw_to_linear(addrdec_t raw) const;
+	new_addr_type partition_address( new_addr_type addr ) const;
+	new_addr_type get_next_raw_address(new_addr_type base, new_addr_type offset) const;
+	new_addr_type get_next_precision_address(new_addr_type base, unsigned precision) const;
 
 private:
    void addrdec_parseoption(const char *option);
@@ -88,6 +91,7 @@ private:
    int ADDR_CHIP_S;
    unsigned char addrdec_mklow[N_ADDRDEC];
    unsigned char addrdec_mkhigh[N_ADDRDEC];
+	unsigned char addrdec_numbit[N_ADDRDEC];
    new_addr_type addrdec_mask[N_ADDRDEC];
    new_addr_type sub_partition_id_mask; 
 

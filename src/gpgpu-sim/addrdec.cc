@@ -36,6 +36,7 @@
 static long int powli( long int x, long int y );
 static unsigned int LOGB2_32( unsigned int v );
 static new_addr_type addrdec_packbits( new_addr_type mask, new_addr_type val, unsigned char high, unsigned char low);
+static new_addr_type addrdec_expandbits( new_addr_type mask, new_addr_type val);
 static void addrdec_getmasklimit(new_addr_type mask, unsigned char *high, unsigned char *low); 
 
 linear_to_raw_address_translation::linear_to_raw_address_translation()
@@ -200,7 +201,65 @@ void linear_to_raw_address_translation::addrdec_tlx(new_addr_type addr, addrdec_
    tlx->sub_partition = tlx->chip * m_n_sub_partition_in_channel
                         + (tlx->bk & sub_partition_addr_mask);
 }
+new_addr_type linear_to_raw_address_translation::raw_to_linear(addrdec_t raw) const{
+	new_addr_type result = 0;
+	assert(raw.chip < m_n_channel);
+	result |= addrdec_expandbits(addrdec_mask[CHIP], raw.chip);
+	result |= addrdec_expandbits(addrdec_mask[BK], raw.bk);	
+	result |= addrdec_expandbits(addrdec_mask[ROW], raw.row);
+	result |= addrdec_expandbits(addrdec_mask[COL], raw.col);
+	result |= addrdec_expandbits(addrdec_mask[BURST], raw.burst);
+	return result;
+}
+new_addr_type linear_to_raw_address_translation::get_next_raw_address(new_addr_type base, new_addr_type offset) const{
+	addrdec_t base_tlx;
+	addrdec_tlx(base, &base_tlx);
+	unsigned col = base_tlx.col;
+	unsigned row = base_tlx.row;
+	if(col + offset < powli(2, addrdec_numbit[COL])){
+		base_tlx.col += offset;
+		return raw_to_linear(base_tlx);
+	}
 
+	base_tlx.col = (offset+col) % powli(2, addrdec_numbit[COL]);
+	offset = (offset+col)/powli(2, addrdec_numbit[COL]);
+	if(row + offset < powli(2, addrdec_numbit[ROW])){
+		base_tlx.row += offset;
+		return raw_to_linear(base_tlx);
+	}
+
+	base_tlx.row = (offset+row) % powli(2, addrdec_numbit[ROW]);
+	offset = (offset+row) / powli(2, addrdec_numbit[ROW]);
+
+	if(base_tlx.bk + offset < powli(2, addrdec_numbit[BK])){
+		base_tlx.bk += offset;
+		return raw_to_linear(base_tlx);
+	}
+	unsigned bk = base_tlx.bk;
+	base_tlx.bk = (offset+bk) % powli(2, addrdec_numbit[BK]);
+	offset = (offset + bk) / powli(2, addrdec_numbit[BK]);
+
+	if(base_tlx.chip + offset < powli(2, addrdec_numbit[CHIP])){
+		base_tlx.bk += offset;
+		return raw_to_linear(base_tlx);
+	}
+	assert(false&&"offset overflow");
+	return -1;
+}
+new_addr_type linear_to_raw_address_translation::get_next_precision_address(new_addr_type base, unsigned precision) const{
+	addrdec_t base_tlx;
+	addrdec_tlx(base, &base_tlx);
+	unsigned precision_remain = precision;
+	unsigned chan = base_tlx.chip;
+	unsigned chan_per_chip = 16; //TODO this is hard coded value for HBM. should be change to address mask
+	unsigned chip = chan / chan_per_chip;
+	unsigned index_in_chip = (chan+precision)% chan_per_chip;
+	unsigned new_chan = chip * chan_per_chip + index_in_chip;
+	unsigned offset_bank = (chan+precision)/chan_per_chip - chip;
+	base_tlx.chip = new_chan;
+	base_tlx.bk += offset_bank;
+	return raw_to_linear(base_tlx);
+}
 void linear_to_raw_address_translation::addrdec_parseoption(const char *option)
 {
    unsigned int dramid_start = 0;
@@ -223,16 +282,20 @@ void linear_to_raw_address_translation::addrdec_parseoption(const char *option)
    addrdec_mask[ROW]  = 0x0;
    addrdec_mask[COL]  = 0x0;
    addrdec_mask[BURST]= 0x0;
-   
+   addrdec_numbit[CHIP] = 0;
+	addrdec_numbit[BK] = 0;
+   addrdec_numbit[ROW] = 0;
+   addrdec_numbit[COL] = 0;
+   addrdec_numbit[BURST] = 0;
    int ofs = 63;
    while ((*cmapping) != '\0') {
       switch (*cmapping) {
          case 'D': case 'd':  
-            assert(dramid_parsed != 1); addrdec_mask[CHIP]  |= (1ULL << ofs); ofs--; break;
-         case 'B': case 'b':   addrdec_mask[BK]    |= (1ULL << ofs); ofs--; break;
-         case 'R': case 'r':   addrdec_mask[ROW]   |= (1ULL << ofs); ofs--; break;
-         case 'C': case 'c':   addrdec_mask[COL]   |= (1ULL << ofs); ofs--; break;
-         case 'S': case 's':   addrdec_mask[BURST] |= (1ULL << ofs); addrdec_mask[COL]   |= (1ULL << ofs); ofs--; break;
+            assert(dramid_parsed != 1); addrdec_mask[CHIP]  |= (1ULL << ofs); ofs--; addrdec_numbit[CHIP]++; break;
+         case 'B': case 'b':   addrdec_mask[BK]    |= (1ULL << ofs); ofs--; addrdec_numbit[BK]++; break;
+         case 'R': case 'r':   addrdec_mask[ROW]   |= (1ULL << ofs); ofs--; addrdec_numbit[ROW]++; break;
+         case 'C': case 'c':   addrdec_mask[COL]   |= (1ULL << ofs); ofs--; addrdec_numbit[COL]++; break;
+         case 'S': case 's':   addrdec_mask[BURST] |= (1ULL << ofs); addrdec_mask[COL]   |= (1ULL << ofs); ofs--; addrdec_numbit[BURST]++; addrdec_numbit[COL]++; break;
          // ignore bit
          case '0': ofs--; break;
          // ignore character
@@ -532,7 +595,26 @@ static new_addr_type addrdec_packbits( new_addr_type mask, new_addr_type val, un
    }
    return result;
 }
-
+static new_addr_type addrdec_expandbits(new_addr_type mask, new_addr_type val){
+	new_addr_type result = 0;
+	unsigned cur_val_bit = 0;
+	unsigned mask_pos = 0;
+	for(size_t i = 0 ; i <sizeof(new_addr_type)*8; i++){
+		cur_val_bit = (val >> i) & 0x1; // takes i th bit
+		for( ; mask_pos < sizeof(new_addr_type)*8; mask_pos++){
+			if((mask >> mask_pos) & 0x1 == 1){
+				break;
+			}
+			if(mask_pos == sizeof(new_addr_type)*8 - 1){
+				return result;
+			}
+		}
+		result = result | (cur_val_bit << mask_pos);
+		mask_pos++;
+	}
+	assert(false);
+	return -1;
+}
 static void addrdec_getmasklimit(new_addr_type mask, unsigned char *high, unsigned char *low) 
 {
    *high = 64;

@@ -27,6 +27,9 @@
 
 #include "gpu-cache.h"
 #include "stat-tool.h"
+#include "addrdec.h"
+#include "mem_fetch.h"
+#include "gpu-sim.h"
 #include <assert.h>
 
 // if use_double_cycle_access is 1 ( = true ), it needs 2 cycle to send request to memport
@@ -2037,7 +2040,7 @@ std::vector<mem_fetch*> data_cache::breakdown_request(mem_fetch* mf){
 		if(! do_fetch)
 			continue;
 		const mem_access_t *ma = new  mem_access_t( mf->get_access_type(),
-				mf->get_addr() + SECTOR_SIZE*ii,
+				mf->get_mem_config()->m_address_mapping.get_next_precision_address(mf->get_addr(), ii),
 				SECTOR_SIZE,
 				mf->is_write(),
 				mf->get_access_warp_mask(),

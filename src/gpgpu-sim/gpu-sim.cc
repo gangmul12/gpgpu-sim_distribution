@@ -1776,7 +1776,7 @@ void gpgpu_sim::cycle()
          time_t curr_time;
          time(&curr_time);
          unsigned long long  elapsed_time = MAX(curr_time - g_simulation_starttime, 1);
-         if ( (elapsed_time - last_liveness_message_time) >= m_config.liveness_message_freq && DTRACE(LIVENESS) ) {
+         if ( (elapsed_time - last_liveness_message_time) >= m_config.liveness_message_freq ) {
             days    = elapsed_time/(3600*24);
             hrs     = elapsed_time/3600 - 24*days;
             minutes = elapsed_time/60 - 60*(hrs + 24*days);
@@ -1793,6 +1793,14 @@ void gpgpu_sim::cycle()
                    (unsigned)((gpu_tot_sim_insn+gpu_sim_insn) / elapsed_time),
                    (unsigned)days,(unsigned)hrs,(unsigned)minutes,(unsigned)sec,
                    ctime(&curr_time));
+				printf( "uArch: inst.: %lld (ipc=%4.1f, occ=%0.4f\% [%llu / %llu]) sim_rate=%u (inst/sec) elapsed = %u:%u:%02u:%02u / %s", 
+                   gpu_tot_sim_insn + gpu_sim_insn, 
+                   (double)gpu_sim_insn/(double)gpu_sim_cycle,
+                   float(active)/float(total) * 100, active, total,
+                   (unsigned)((gpu_tot_sim_insn+gpu_sim_insn) / elapsed_time),
+                   (unsigned)days,(unsigned)hrs,(unsigned)minutes,(unsigned)sec,
+                   ctime(&curr_time));
+
             fflush(stdout);
             last_liveness_message_time = elapsed_time; 
          }
