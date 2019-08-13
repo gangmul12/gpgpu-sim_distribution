@@ -1180,7 +1180,6 @@ void baseline_cache::send_read_request(new_addr_type addr, new_addr_type block_a
 /// Read miss handler. Check MSHR hit or MSHR available
 void baseline_cache::send_read_request(new_addr_type addr, new_addr_type block_addr, unsigned cache_index, mem_fetch *mf,
 		unsigned time, bool &do_miss, bool &wb, evicted_block_info &evicted, std::list<cache_event> &events, bool read_only, bool wa){
-
 	new_addr_type mshr_addr = m_config.mshr_addr(mf->get_addr());
     bool mshr_hit = m_mshrs.probe(mshr_addr);
     bool mshr_avail = !m_mshrs.full(mshr_addr);
@@ -1289,6 +1288,14 @@ void data_cache::send_read_request(new_addr_type addr, new_addr_type block_addr,
     else
     	assert(0);
 }
+void data_cache::send_read_request(mem_fetch *mf, cache_event request, unsigned time, std::list<cache_event> &events){
+	events.push_back(request);
+	if(m_have_prefetcher)
+		m_first_miss_queue.push_back(mf);
+	else
+		m_miss_queue.push_back(mf);
+	mf->set_status(m_miss_queue_status, time);
+}	
 //////////////////////////////////////////
 
 
@@ -1700,12 +1707,23 @@ data_cache::rd_miss_base( new_addr_type addr,
                           unsigned time,
                           std::list<cache_event> &events,
                           enum cache_request_status status ){
-	 if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
+
+		 if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
 	 	miss_queue_full_fcn = &data_cache::first_miss_queue_full;
 	 }
 	 else{
 		 miss_queue_full_fcn = &data_cache::miss_queue_full;
 	 }
+
+	if(m_bypass_global_rd_miss && mf->get_access_type() == GLOBAL_ACC_R){
+		if((this->*data_cache::miss_queue_full_fcn)(0)){
+			return RESERVATION_FAIL;
+
+		}
+		send_read_request(mf, READ_REQUEST_SENT, time, events);
+		return MISS;
+	}
+
 	if((this->*data_cache::miss_queue_full_fcn)(1)) {
         // cannot handle request this cycle
         // (might need to generate two requests)

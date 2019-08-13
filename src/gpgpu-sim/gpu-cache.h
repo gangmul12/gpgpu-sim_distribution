@@ -521,6 +521,7 @@ public:
         m_set_index_function = LINEAR_SET_FUNCTION;
         m_is_streaming = false;
 	have_prefetcher = false;
+	m_bypass_global = false;
 	m_fill_port_width = 0;
     }
     void init(char * config, FuncCache status)
@@ -737,6 +738,7 @@ public:
     char *m_config_stringPrefShared;
     FuncCache cache_status;
     bool have_prefetcher;
+	 bool m_bypass_global;
 	 unsigned fetch_mask;
 protected:
     void exit_parse_error()
@@ -1326,7 +1328,6 @@ protected:
     /// Read miss handler. Check MSHR hit or MSHR available
     void send_read_request(new_addr_type addr, new_addr_type block_addr, unsigned cache_index, mem_fetch *mf,
     		unsigned time, bool &do_miss, bool &wb, evicted_block_info &evicted, std::list<cache_event> &events, bool read_only, bool wa);
-
     /// Sub-class containing all metadata for port bandwidth management 
     class bandwidth_management 
     {
@@ -1385,6 +1386,7 @@ public:
         m_wr_alloc_type = wr_alloc_type;
         m_wrbk_type = wrbk_type;
 	m_have_prefetcher=false;
+	m_bypass_global_rd_miss=false;
     }
 
     virtual ~data_cache() {}
@@ -1495,7 +1497,7 @@ protected:
 protected:
     mem_fetch_allocator *m_memfetch_creator;
     bool m_have_prefetcher;
-
+	 bool m_bypass_global_rd_miss;
     // for first_pre_cycle && second_pre_cycle
     std::list<mem_fetch*> m_first_miss_queue;
     std::list<mem_fetch*> m_second_miss_queue;
@@ -1525,6 +1527,7 @@ protected:
     void send_read_request(new_addr_type addr, new_addr_type block_addr, unsigned cache_index, mem_fetch *mf,
     		unsigned time, bool &do_miss, bool &wb, evicted_block_info &evicted, std::list<cache_event> &events, bool read_only, bool wa);
 
+	 void send_read_request(mem_fetch* mf, cache_event request, unsigned time, std::list<cache_event> &events);
 
 
 /////////////////////////////////////////////////////
@@ -1708,7 +1711,8 @@ public:
     l2_cache(const char *name,  cache_config &config,
             int core_id, int type_id, mem_fetch_interface *memport,
             mem_fetch_allocator *mfcreator, enum mem_fetch_status status )
-            : data_cache(name,config,core_id,type_id,memport,mfcreator,status, L2_WR_ALLOC_R, L2_WRBK_ACC){}
+            : data_cache(name,config,core_id,type_id,memport,mfcreator,status, L2_WR_ALLOC_R, L2_WRBK_ACC){
+				m_bypass_global_rd_miss = config.m_bypass_global;}
 
     virtual ~l2_cache() {}
 
