@@ -2491,7 +2491,6 @@ void ldst_unit::cycle()
 				 m_L1D->fill(mf,gpu_sim_cycle+gpu_tot_sim_cycle);
              m_response_fifo.pop_front();
              m_prefetch_map[mf->get_addr()]=mf->get_timestamp();
-             delete mf;
            }
        } else if (mf->get_access_type() == TEXTURE_ACC_R) {
            if (m_L1T->fill_port_free()) {

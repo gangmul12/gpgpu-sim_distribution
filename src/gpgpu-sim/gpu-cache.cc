@@ -1188,8 +1188,8 @@ void baseline_cache::send_read_request(new_addr_type addr, new_addr_type block_a
     		m_tag_array->access(block_addr,time,cache_index,mf);
     	else
     		m_tag_array->access(block_addr,time,cache_index,wb,evicted,mf);
-
-        m_mshrs.add(mshr_addr,mf);
+	if(!mf->is_prefetched())
+        	m_mshrs.add(mshr_addr,mf);
         do_miss = true;
 
     } else if ( !mshr_hit && mshr_avail && (m_miss_queue.size() < m_config.m_miss_queue_size) ) {
@@ -1239,9 +1239,11 @@ void data_cache::send_read_request(new_addr_type addr, new_addr_type block_addr,
 		 if(read_only)
 			 m_tag_array->access(block_addr,time,cache_index,mf);
 		 else
-			 m_tag_array->access(block_addr,time,cache_index,wb,evicted,mf);
-		 m_mshrs.add(mshr_addr,mf);
-		 do_miss = true;
+		 	m_tag_array->access(block_addr,time,cache_index,wb,evicted,mf);
+		 if(!mf->is_prefetched() || !m_have_prefetcher){
+                 	m_mshrs.add(mshr_addr,mf);
+		 	do_miss = true;
+		 }
 
     } else if ( !mshr_hit && mshr_avail && (m_miss_queue.size() < m_config.m_miss_queue_size) ) {
 		 if(read_only)
@@ -1260,6 +1262,7 @@ void data_cache::send_read_request(new_addr_type addr, new_addr_type block_addr,
 		 if(m_config.m_cache_type==LARGE){
 		 	reqs = breakdown_request(mf);
 			m_extra_mf_fields[mf].pending_read = reqs.size();
+
 		 }
 		 else{
 			 reqs.push_back(mf);
@@ -1735,6 +1738,7 @@ data_cache::rd_miss_base( new_addr_type addr,
     bool do_miss = false;
     bool wb = false;
     evicted_block_info evicted;
+
     send_read_request( addr,
                        block_addr,
                        cache_index,
@@ -1831,13 +1835,14 @@ data_cache::process_tag_probe( bool wr,
             access_status = (this->*m_rd_miss)( addr,
                                        cache_index,
                                        mf, time, events, probe_status );
+
         }else {
         	//the only reason for reservation fail here is LINE_ALLOC_FAIL (i.e all lines are reserved)
-        	m_stats.inc_fail_stats(mf->get_access_type(), LINE_ALLOC_FAIL);
+               m_stats.inc_fail_stats(mf->get_access_type(), LINE_ALLOC_FAIL);
         }
     }
 
-    m_bandwidth_management.use_data_port(mf, access_status, events); 
+    m_bandwidth_management.use_data_port(mf, access_status, events);
     return access_status;
 }
 // only data cache have prefetcher
@@ -1852,7 +1857,7 @@ void data_cache::fill(mem_fetch *mf, unsigned time){
 
 	if(e->second.pending_read > 0) {
     		//wait for the other requests to come back
-    		delete mf;
+                delete mf;
     		return;
       } else {
     		mem_fetch *temp = mf;
@@ -1874,13 +1879,17 @@ void data_cache::fill(mem_fetch *mf, unsigned time){
         	m_tag_array->remove_pending_line(mf);
     }
     else abort();
-	 if(m_have_prefetcher){
+    if(m_have_prefetcher){
     	std::map<new_addr_type,unsigned>::iterator iter;
     	iter = m_pre_map.find(mf->get_addr());
     	if(iter!=m_pre_map.end()){
       	  m_pre_map.erase(mf->get_addr());
     	}
-	 }
+        if(mf->is_prefetched()){
+            delete mf;
+        }
+
+    }
 
     bool has_atomic = false;
 // if prefetch request poses in mshr, remove it when corresponding address was returned
@@ -1996,7 +2005,7 @@ data_cache::access( new_addr_type addr,
 	}
     }
 
-    if(access_status == HIT){
+    if(access_status == HIT && m_have_prefetcher){
 	if(m_tag_array->get_block(cache_index)->m_prefetched && !(m_tag_array->get_block(cache_index)->m_accessed)){// if first hit to prefetched block
 	    m_tag_array->get_block(cache_index)->m_accessed=true; // set flag
 	    double pre_dist = time - m_pre_issued_map[mf->get_addr()]; 
@@ -2004,7 +2013,7 @@ data_cache::access( new_addr_type addr,
 	    m_stats.inc_num_prefetch_hit();// increase number of hit
 	}
     }
-    else if(access_status == HIT_RESERVED){
+    else if(access_status == HIT_RESERVED && m_have_prefetcher){
     	 if(m_pre_map.count(mf->get_addr())){// prefetch request is on the fly
 		 if(!(m_tag_array->get_block(cache_index)->m_loaded_check)){
 		     m_tag_array->get_block(cache_index)->m_loaded_check=true;
@@ -2073,7 +2082,9 @@ std::vector<mem_fetch*> data_cache::breakdown_request(mem_fetch* mf){
 				mf->get_tpc(),
 				mf->get_mem_config(),
 				mf);
-
+                         if(mf->is_prefetched()){
+                             n_mf->set_prefetch_flag();
+                         }
 			 result.push_back(n_mf);
 
 	}
