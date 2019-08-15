@@ -1676,6 +1676,7 @@ void ldst_unit::process_prefetch_cache_access( data_cache* cache,
     else {
       assert(status == HIT_RESERVED);
       m_prefetcher->del_req_from_top();
+      delete mf;
     }
 }
 
