@@ -1704,10 +1704,8 @@ void gpgpu_sim::cycle()
       // L1 cache + shader core pipeline stages
       m_power_stats->pwr_mem_stat->core_cache_stats[CURRENT_STAT_IDX].clear();
       for (unsigned i=0;i<m_shader_config->n_simt_clusters;i++) {
-         if (m_cluster[i]->get_not_completed() || get_more_cta_left() ) {
-               m_cluster[i]->core_cycle();
-               *active_sms+=m_cluster[i]->get_n_active_sms();
-         }
+         m_cluster[i]->core_cycle();
+         *active_sms+=m_cluster[i]->get_n_active_sms();
          // Update core icnt/cache stats for GPUWattch
          m_cluster[i]->get_icnt_stats(m_power_stats->pwr_mem_stat->n_simt_to_mem[CURRENT_STAT_IDX][i], m_power_stats->pwr_mem_stat->n_mem_to_simt[CURRENT_STAT_IDX][i]);
          m_cluster[i]->get_cache_stats(m_power_stats->pwr_mem_stat->core_cache_stats[CURRENT_STAT_IDX]);

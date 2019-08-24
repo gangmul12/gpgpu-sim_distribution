@@ -3256,9 +3256,6 @@ void shader_core_config::set_pipeline_latency() {
 
 void shader_core_ctx::cycle()
 {
-	if(!isactive() && get_not_completed() == 0)
-		return;
-
 	m_stats->shader_cycles[m_sid]++;
     writeback();
     execute();
@@ -4290,18 +4287,11 @@ void simt_core_cluster::icnt_cycle()
         // - For read request and atomic request, the packet contains the data 
         // - For write-ack, the packet only has control metadata
         unsigned int packet_size = (mf->get_is_write())? mf->get_ctrl_size() : mf->size();
-// for deadlock avoid
-	unsigned cid = m_config->sid_to_cid(mf->get_sid());
-        if (m_core[cid]->get_not_completed()){
-		m_stats->m_incoming_traffic_stats->record_traffic(mf, packet_size); 
-		mf->set_status(IN_CLUSTER_TO_SHADER_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
-	        //m_memory_stats->memlatstat_read_done(mf,m_shader_config->max_warps_per_shader);
-		m_response_fifo.push_back(mf);
-		m_stats->n_mem_to_simt[m_cluster_id] += mf->get_num_flits(false);
-// for deadlock avoid		
-	} else{
-		delete mf;
-	}
+	m_stats->m_incoming_traffic_stats->record_traffic(mf, packet_size); 
+	mf->set_status(IN_CLUSTER_TO_SHADER_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
+	//m_memory_stats->memlatstat_read_done(mf,m_shader_config->max_warps_per_shader);
+	m_response_fifo.push_back(mf);
+	m_stats->n_mem_to_simt[m_cluster_id] += mf->get_num_flits(false);
     }
 }
 
