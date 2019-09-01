@@ -1317,6 +1317,7 @@ void data_cache::send_write_request(mem_fetch *mf, cache_event request, unsigned
 		 reqs.push_back(mf);
 	 }
 	 for(unsigned ii = 0 ; ii < reqs.size() ; ii++){
+		 
 		 mem_fetch* req = reqs[ii];
     	if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
 			m_first_miss_queue.push_back(req);
@@ -1325,7 +1326,6 @@ void data_cache::send_write_request(mem_fetch *mf, cache_event request, unsigned
 			m_miss_queue.push_back(req);
     	}
     	req->set_status(m_miss_queue_status,time);
-		//req->print(stdout);
 	 }
 }
 
@@ -2075,7 +2075,7 @@ data_cache::pre_access( new_addr_type addr,
 // added by capp : large cacheline
 std::vector<mem_fetch*> data_cache::breakdown_request(mem_fetch* mf){
 	std::vector<mem_fetch*> result;
-	for(unsigned ii = 0 ; ii < m_config.get_line_sz()/SECTOR_SIZE ; ii++){
+	for(unsigned ii = 0 ; ii < 32 ; ii++){
 		bool do_fetch = (m_config.fetch_mask >> ii & 1) == 1;
 		if(! do_fetch)
 			continue;
