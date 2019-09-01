@@ -1760,7 +1760,14 @@ mem_stage_stall_type ldst_unit::process_memory_access_queue_l1cache( l1_cache *c
     		if( mf->get_inst().is_store() ) {
 				unsigned inc_ack = (m_config->m_L1D_config.get_mshr_type() == SECTOR_ASSOC)?
 						(mf->get_data_size()/SECTOR_SIZE) : 1;
-
+				if(m_config->m_L1D_config.m_cache_type == LARGE){
+					unsigned fm = m_config->m_L1D_config.fetch_mask;
+					unsigned count=0;
+					for(unsigned ii = 0 ; ii < 32 ; ii ++){
+						count += (fm>>ii &1);
+					}
+					inc_ack = count;
+				}
 				for(unsigned i=0; i< inc_ack; ++i)
 					m_core->inc_store_req( inst.warp_id() );
 			}
@@ -2506,12 +2513,12 @@ void ldst_unit::cycle()
        } else {
     	   if( mf->get_type() == WRITE_ACK || ( m_config->gpgpu_perfect_mem && mf->get_is_write() )) {
 // TODO : fix it
-               if(m_config->m_L1D_config.get_mshr_type()==SECTOR_ASSOC){
-                   for(unsigned ii=0; ii < mf->get_data_size()/SECTOR_SIZE; ii++){
-                       m_core->store_ack(mf);
-                   }
-               }
-               else m_core->store_ack(mf);
+               //if(m_config->m_L1D_config.get_mshr_type()==SECTOR_ASSOC){
+               //    for(unsigned ii=0; ii < mf->get_data_size()/SECTOR_SIZE; ii++){
+               //        m_core->store_ack(mf);
+               //    }
+               //}
+               m_core->store_ack(mf);
                m_response_fifo.pop_front();
                delete mf;
            } else {

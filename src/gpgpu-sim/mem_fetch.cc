@@ -92,7 +92,7 @@ void mem_fetch::print( FILE *fp, bool print_inst ) const
         fprintf(fp," <NULL mem_fetch pointer>\n");
         return;
     }
-    fprintf(fp,"  mf: uid=%6u, sid%02u:w%02u, cta_id%02u, part=%u, prefet=%u, approx=%u, ", m_request_uid, m_sid, m_wid, m_cta_id, m_raw_addr.chip, m_prefetched, m_approx );
+    fprintf(fp,"  mf: uid=%6u, sid%02u:w%02u, cta_id%02u, part=%u, prefet=%u, approx=%u, dsize=%u, ", m_request_uid, m_sid, m_wid, m_cta_id, m_raw_addr.chip, m_prefetched, m_approx, m_data_size );
     m_access.print(fp);
     if( (unsigned)m_status < NUM_MEM_REQ_STAT ) 
        fprintf(fp," status = %s (%llu), ", Status_str[m_status], m_status_change );

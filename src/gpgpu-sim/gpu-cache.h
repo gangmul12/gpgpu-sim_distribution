@@ -740,6 +740,8 @@ public:
     bool have_prefetcher;
 	 bool m_bypass_global;
 	 unsigned fetch_mask;
+    enum cache_type m_cache_type;
+
 protected:
     void exit_parse_error()
     {
@@ -762,7 +764,6 @@ protected:
     enum write_policy_t m_write_policy;             // 'T' = write through, 'B' = write back, 'R' = read only
     enum allocation_policy_t m_alloc_policy;        // 'm' = allocate on miss, 'f' = allocate on fill
     enum mshr_config_t m_mshr_type;
-    enum cache_type m_cache_type;
 
     write_allocate_policy_t m_write_alloc_policy;	// 'W' = Write allocate, 'N' = No write allocate
 

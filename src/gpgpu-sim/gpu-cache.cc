@@ -1307,13 +1307,26 @@ void data_cache::send_read_request(mem_fetch *mf, cache_event request, unsigned 
 void data_cache::send_write_request(mem_fetch *mf, cache_event request, unsigned time, std::list<cache_event> &events){
 
     events.push_back(request);
-    if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
-	m_first_miss_queue.push_back(mf);
-    }
-    else{
-	m_miss_queue.push_back(mf);
-    }
-    mf->set_status(m_miss_queue_status,time);
+	 //printf("==original==");
+	 //mf->print(stdout);
+	 std::vector<mem_fetch*> reqs;
+	 if(m_config.m_cache_type==LARGE){
+		 reqs =breakdown_request(mf);
+	 }
+	 else{
+		 reqs.push_back(mf);
+	 }
+	 for(unsigned ii = 0 ; ii < reqs.size() ; ii++){
+		 mem_fetch* req = reqs[ii];
+    	if(m_have_prefetcher && USE_DOUBLE_CYCLE_ACCESS){
+			m_first_miss_queue.push_back(req);
+    	}
+    	else{
+			m_miss_queue.push_back(req);
+    	}
+    	req->set_status(m_miss_queue_status,time);
+		//req->print(stdout);
+	 }
 }
 
 
@@ -2068,7 +2081,7 @@ std::vector<mem_fetch*> data_cache::breakdown_request(mem_fetch* mf){
 			continue;
 		const mem_access_t *ma = new  mem_access_t( mf->get_access_type(),
 				mf->get_mem_config()->m_address_mapping.get_next_precision_address(mf->get_addr(), ii),
-				SECTOR_SIZE,
+				mf->get_data_size()/SECTOR_SIZE,
 				mf->is_write(),
 				mf->get_access_warp_mask(),
 				mf->get_access_byte_mask(),
@@ -2085,6 +2098,7 @@ std::vector<mem_fetch*> data_cache::breakdown_request(mem_fetch* mf){
                          if(mf->is_prefetched()){
                              n_mf->set_prefetch_flag();
                          }
+		if(mf->is_approx()) n_mf->set_approx();
 			 result.push_back(n_mf);
 
 	}

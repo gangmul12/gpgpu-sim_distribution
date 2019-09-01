@@ -650,7 +650,11 @@ std::vector<mem_fetch*> memory_sub_partition::breakdown_request_to_sector_reques
 			 result.push_back(n_mf);
 			 byte_sector_mask <<= SECTOR_SIZE;
 		}
-	} else {
+	} else if(mf->is_approx() && mf->get_access_type() == GLOBAL_ACC_W){
+		assert(mf->get_data_size()<32);
+		result.push_back(mf);
+//		mf->print(stdout);
+   } else {
 		 printf("Invalid sector received, address = 0x%06x, sector mask = %d, byte mask = , data size = %d",
 					    		mf->get_addr(), mf->get_access_sector_mask().count(), mf->get_data_size());
 		 assert(0 && "Undefined data size is received");
