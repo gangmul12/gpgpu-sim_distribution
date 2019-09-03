@@ -725,6 +725,8 @@ MA_TUP_BEGIN( mem_access_type ) \
    MA_TUP( INST_ACC_R ), \
    MA_TUP( L1_WR_ALLOC_R ), \
    MA_TUP( L2_WR_ALLOC_R ), \
+   MA_TUP( L1WB_WR_ALLOC_R ), \
+   MA_TUP( L1WB_WRBK_ACC ), \
    MA_TUP( NUM_MEM_ACCESS_TYPE ) \
 MA_TUP_END( mem_access_type ) 
 
@@ -808,6 +810,7 @@ public:
        case L2_WRBK_ACC:   fprintf(fp,"L2_WRBK "); break;
        case INST_ACC_R:    fprintf(fp,"INST    "); break;
        case L1_WRBK_ACC:   fprintf(fp,"L1_WRBK "); break;
+		 case L1WB_WRBK_ACC: fprintf(fp,"WB_WRBK "); break;
        default:            fprintf(fp,"unknown "); break;
        }
    }

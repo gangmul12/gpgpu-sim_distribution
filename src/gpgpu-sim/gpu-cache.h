@@ -44,7 +44,8 @@ enum cache_block_state {
     INVALID=0,
     RESERVED,
     VALID,
-    MODIFIED
+    MODIFIED,
+	 PARTIAL
 };
 
 enum cache_request_status {
@@ -53,6 +54,7 @@ enum cache_request_status {
     MISS,
     RESERVATION_FAIL, 
 	SECTOR_MISS,
+	PARTIAL_SECTOR_MISS,
     NUM_CACHE_REQUEST_STATUS
 };
 
@@ -85,6 +87,21 @@ struct evicted_block_info {
 	}
 };
 
+typedef std::bitset<32> mem_access_sector32_mask_t;
+struct evicted_sector_block_info {
+	new_addr_type m_block_addr;
+	unsigned m_modified_size;
+	mem_access_sector32_mask_t m_sector;
+	evicted_sector_block_info(){
+		m_block_addr=0;
+		m_modified_size =0;
+	}
+	void set_info(new_addr_type block_addr, unsigned modified_size, mem_access_sector32_mask_t sector){
+		m_block_addr = block_addr;
+		m_modified_size = modified_size;
+		m_sector = sector;
+	}
+};
 struct cache_event {
 	enum cache_event_type m_cache_event_type;
 	evicted_block_info m_evicted_block; //if it was write_back event, fill the the evicted block info
@@ -453,6 +470,234 @@ private:
     	}
     }
 };
+const unsigned SECTOR_CHUNK_SIZE32=32;
+
+struct buffer_block_t {
+    buffer_block_t()
+    {
+        m_tag=0;
+        m_block_addr=0;
+        m_accessed = false;
+    }
+
+    virtual void allocate( new_addr_type tag, new_addr_type block_addr, unsigned time, mem_access_sector32_mask_t sector_mask) = 0;
+
+    virtual bool is_invalid_line() = 0;
+    virtual bool is_valid_line() = 0;
+    virtual bool is_reserved_line() = 0;
+    virtual bool is_modified_line() = 0;
+
+    virtual enum cache_block_state get_status( mem_access_sector32_mask_t sector_mask) = 0;
+    virtual void set_status(enum cache_block_state m_status, mem_access_sector32_mask_t sector_mask) = 0;
+
+    virtual unsigned long long get_last_access_time() = 0;
+    virtual void set_last_access_time(unsigned long long time, mem_access_sector32_mask_t sector_mask) = 0;
+    virtual unsigned long long get_alloc_time() = 0;
+    virtual unsigned get_modified_size() = 0;
+    virtual void print_status()=0;
+    virtual ~buffer_block_t() {}
+
+
+    new_addr_type    m_tag;
+    new_addr_type    m_block_addr;
+    bool m_accessed;
+
+};
+
+
+struct sector32_cache_block : public buffer_block_t {
+	sector32_cache_block()
+    {
+		init();
+    }
+
+	void init() {
+		for(unsigned i =0; i< SECTOR_CHUNK_SIZE32; ++i) {
+			m_sector_alloc_time[i]= 0;
+			m_sector_fill_time[i]= 0;
+			m_last_sector_access_time[i]= 0;
+			m_status[i]= INVALID;
+			}
+			m_line_alloc_time=0;
+			m_line_last_access_time=0;
+			m_line_fill_time=0;
+	}
+
+	virtual void allocate( new_addr_type tag, new_addr_type block_addr, unsigned time, mem_access_sector32_mask_t sector_mask )
+    {
+    	allocate_line( tag,  block_addr,  time, sector_mask );
+    }
+
+    void allocate_line( new_addr_type tag, new_addr_type block_addr, unsigned time, mem_access_sector32_mask_t sector_mask )
+	{
+		//allocate a new line
+		//assert(m_block_addr != 0 && m_block_addr != block_addr);
+		init();
+		m_tag=tag;
+		m_block_addr=block_addr;
+
+		//set sector stats
+		for(unsigned i = 0; i < SECTOR_CHUNK_SIZE32; i++){
+			if(sector_mask[i]){
+				m_sector_alloc_time[i] = time;
+				m_last_sector_access_time[i] = time;
+				m_sector_fill_time[i] = time;
+				m_status[i] = MODIFIED;
+			}
+		}
+		//set line stats
+		m_line_last_access_time=time;
+		m_line_fill_time=time;
+
+		//set line stats
+		m_line_alloc_time=time;   //only set this for the first allocated sector
+		m_accessed = false;
+	}
+
+    void allocate_sector(unsigned time, mem_access_sector32_mask_t sector_mask )
+	{
+    	//allocate invalid sector of this allocated valid line
+    	assert(is_valid_line());
+
+		//set sector stats
+		for(unsigned i = 0; i < SECTOR_CHUNK_SIZE32; i++){
+			if(sector_mask[i]){
+				m_sector_alloc_time[i] = time;
+				m_last_sector_access_time[i] = time;
+				m_sector_fill_time[i] = time;
+				m_status[i] = MODIFIED;
+			}
+		}
+		//set line stats
+		m_line_last_access_time=time;
+		m_line_fill_time=time;
+	}
+	virtual bool is_valid_line(){return !is_invalid_line();}
+    virtual bool is_invalid_line() {
+    	//all the sectors should be invalid
+    	for(unsigned i =0; i< SECTOR_CHUNK_SIZE32; ++i) {
+    		if (m_status[i] != INVALID)
+    			return false;
+    	}
+    	return true;
+    }
+    virtual bool is_reserved_line() {
+    	//if any of the sector is reserved, then the line is reserved
+		for(unsigned i =0; i< SECTOR_CHUNK_SIZE32; ++i) {
+			if (m_status[i] == RESERVED)
+				return true;
+		}
+		return false;
+    }
+    virtual bool is_modified_line() {
+    	//if any of the sector is modified, then the line is modified
+    	for(unsigned i =0; i< SECTOR_CHUNK_SIZE32; ++i) {
+			if (m_status[i] == MODIFIED)
+				return true;
+		}
+		return false;
+    }
+
+    virtual enum cache_block_state get_status(mem_access_sector32_mask_t sector_mask)
+	{
+		enum cache_block_state result;
+		bool is_first=true;
+		for(unsigned i = 0 ; i < SECTOR_CHUNK_SIZE32; ++i){
+			if(sector_mask[i]==true){
+				if(is_first){
+					result = m_status[i];
+					is_first=false;
+				}
+				else{
+					assert(m_status[i]!=RESERVED);
+					assert(m_status[i]!=VALID);
+					if(result != m_status[i]){
+						result = PARTIAL; 
+					}
+				}
+			}
+		}
+		assert(!is_first);
+		return result;
+	}
+
+    virtual void set_status(enum cache_block_state status, mem_access_sector32_mask_t sector_mask)
+	{
+		for(unsigned i = 0 ; i < SECTOR_CHUNK_SIZE32 ; i++){
+			if(sector_mask[i]){
+				m_status[i] = status;
+			}
+		}
+
+	}
+
+    virtual unsigned long long get_last_access_time()
+	{
+		return m_line_last_access_time;
+	}
+
+    virtual void set_last_access_time(unsigned long long time, mem_access_sector32_mask_t sector_mask)
+	{
+		for(unsigned i = 0 ; i < SECTOR_CHUNK_SIZE32 ; i++){
+			if(sector_mask[i]){
+				m_last_sector_access_time[i] = time;
+			}
+		}
+		m_line_last_access_time = time;
+	}
+
+    virtual unsigned long long get_alloc_time()
+	{
+		return m_line_alloc_time;
+	}
+
+
+    virtual unsigned  get_modified_size()
+	{
+		unsigned modified=0;
+		for(unsigned i =0; i< SECTOR_CHUNK_SIZE32; ++i) {
+			if (m_status[i] == MODIFIED)
+				modified++;
+		}
+		return modified * SECTOR_SIZE;
+	}
+
+    virtual void print_status() {
+    	 printf("m_block_addr is %llu, status = %u %u %u %u\n", m_block_addr, m_status[0], m_status[1], m_status[2], m_status[3]);
+    }
+
+	 void invalidate(){
+		for(unsigned i = 0 ; i < SECTOR_CHUNK_SIZE32 ; i++)
+				m_status[i] = INVALID;
+	 }
+	 mem_access_sector32_mask_t get_dirty_mask(){
+	 	mem_access_sector32_mask_t result;
+		for(unsigned i = 0 ; i < SECTOR_CHUNK_SIZE32 ; i++){
+			if(m_status[i]==MODIFIED)
+				result.set(i);
+		}
+		return result;
+	 }
+
+
+private:
+    unsigned m_sector_alloc_time[SECTOR_CHUNK_SIZE32];
+    unsigned m_last_sector_access_time[SECTOR_CHUNK_SIZE32];
+    unsigned m_sector_fill_time[SECTOR_CHUNK_SIZE32];
+    unsigned m_line_alloc_time;
+    unsigned m_line_last_access_time;
+    unsigned m_line_fill_time;
+    cache_block_state    m_status[SECTOR_CHUNK_SIZE32];
+
+    unsigned get_sector_index(mem_access_sector32_mask_t sector_mask)
+    {
+    	assert(sector_mask.count() == 1);
+    	for(unsigned i =0; i< SECTOR_CHUNK_SIZE32; ++i) {
+    		if(sector_mask.to_ulong() & (1<<i))
+    			return i;
+    	}
+    }
+};
 
 enum replacement_policy_t {
     LRU,
@@ -523,6 +768,7 @@ public:
 	have_prefetcher = false;
 	m_bypass_global = false;
 	m_fill_port_width = 0;
+	m_has_write_buffer=false;
     }
     void init(char * config, FuncCache status)
     {
@@ -742,6 +988,7 @@ public:
 	 unsigned fetch_mask;
     enum cache_type m_cache_type;
 
+	 bool m_has_write_buffer;
 protected:
     void exit_parse_error()
     {
@@ -783,7 +1030,6 @@ protected:
     unsigned m_data_port_width; //< number of byte the cache can access per cycle 
     unsigned m_fill_port_width;
     enum set_index_function m_set_index_function; // Hash, linear, or custom set index function
-
     friend class tag_array;
     friend class baseline_cache;
     friend class read_only_cache;
@@ -876,6 +1122,49 @@ protected:
     typedef tr1_hash_map<new_addr_type,unsigned> line_table;
     line_table pending_lines;
 };
+
+class buffer_tag_array {
+public:
+    // Use this constructor
+    buffer_tag_array(int core_id, int type_id );
+    ~buffer_tag_array();
+
+    enum cache_request_status probe( new_addr_type addr, unsigned &idx, mem_fetch* mf) const;
+    enum cache_request_status access( new_addr_type addr, unsigned time, unsigned &idx, bool &wb, evicted_sector_block_info &evicted, mem_fetch* mf );
+
+    unsigned size() const { return m_line_num;}
+    sector32_cache_block* get_block(unsigned idx) { return m_lines[idx];}
+
+    void flush(); // flush all written entries
+    void invalidate(); // invalidate all entries
+
+
+protected:
+
+	 friend class write_buffer;
+    sector32_cache_block **m_lines; /* nbanks x nset x assoc lines in total */
+
+    unsigned m_access;
+    unsigned m_miss;
+    unsigned m_pending_hit; // number of cache miss that hit a line that is allocated but not filled
+    unsigned m_res_fail;
+    unsigned m_sector_miss;
+
+
+    int m_core_id; // which shader core is using this
+    int m_type_id; // what kind of cache is this (normal, texture, constant)
+	 unsigned m_line_num;
+	 unsigned m_line_size_log2;
+	 unsigned m_line_size;
+	 unsigned get_set_index(new_addr_type addr)const {return (addr >> m_line_size_log2)&(m_line_num-1);}
+	 new_addr_type get_tag(new_addr_type addr)const {return addr & ~(new_addr_type)(m_line_size-1);}
+	 new_addr_type get_block_addr(new_addr_type addr)const {return get_tag(addr);}
+	 void calculate_mask(mem_fetch* mf, mem_access_sector32_mask_t &mask) const;
+
+
+
+};
+
 
 class mshr_table {
 public:
@@ -1724,6 +2013,48 @@ public:
                 std::list<cache_event> &events );
     virtual enum cache_request_status pre_access( new_addr_type addr, mem_fetch *mf, unsigned time, std::list<cache_event> &events );
  
+
+};
+class shader_memory_interface;
+class write_buffer{
+public:
+	write_buffer(const char *name,
+			int core_id, int type_id, mem_fetch_interface *memport,
+         mem_fetch_allocator *mfcreator, enum mem_fetch_status status, unsigned fm)
+			{
+				m_name = name;
+				m_miss_queue_status = status;
+				m_miss_queue_size = 128;
+				m_memfetch_creator=mfcreator;
+				m_memport = memport;
+				m_buffer_tag_array = new buffer_tag_array(core_id, type_id);
+				m_wrbk_type=L1WB_WRBK_ACC;
+				m_fetch_mask=fm;
+	}
+	virtual ~write_buffer(){delete m_buffer_tag_array;}
+	virtual enum cache_request_status
+        access( new_addr_type addr,
+                mem_fetch *mf,
+                unsigned time,
+                std::list<cache_event> &events );
+	void send_write_request(mem_fetch* mf, cache_event request, unsigned time, std::list<cache_event>&events, mem_access_sector32_mask_t sector_mask);
+	void bypass_read_request(mem_fetch* mf, unsigned time, std::list<cache_event>& events);
+	void cycle();
+
+protected:
+	buffer_tag_array* m_buffer_tag_array;
+	mem_fetch_interface* m_memport;
+	std::string m_name;
+   std::list<mem_fetch*> m_miss_queue;
+	unsigned m_miss_queue_size;
+	mem_fetch_allocator* m_memfetch_creator;
+	mem_access_type m_wrbk_type;
+   enum mem_fetch_status m_miss_queue_status;
+	bool miss_queue_full(unsigned int additional){ 
+		return m_miss_queue.size()+additional > m_miss_queue_size;
+	}
+   std::vector<mem_fetch*> breakdown_request(mem_fetch* mf);
+	unsigned m_fetch_mask;
 
 };
 

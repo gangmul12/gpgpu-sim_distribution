@@ -1304,6 +1304,7 @@ public:
     unsigned get_max_dist();
     unsigned get_dist_size();
 
+	 fifo_pipeline<mem_fetch>* m_L1_WB_queue;
 
 
 
@@ -1355,6 +1356,7 @@ protected:
    tex_cache *m_L1T; // texture cache
    read_only_cache *m_L1C; // constant cache
    l1_cache *m_L1D; // data cache
+	write_buffer *m_write_buffer;
    std::map<unsigned/*warp_id*/, std::map<unsigned/*regnum*/,unsigned/*count*/> > m_pending_writes;
    std::list<mem_fetch*> m_response_fifo;
    opndcoll_rfu_t *m_operand_collector;
@@ -2103,6 +2105,7 @@ public:
     friend class scheduler_unit; //this is needed to use private issue warp.
     friend class TwoLevelScheduler;
     friend class LooseRoundRobbinScheduler;
+	 friend class write_buffer_memory_interface;
     void issue_warp( register_set& warp, const warp_inst_t *pI, const active_mask_t &active_mask, unsigned warp_id, unsigned sch_id );
     void func_exec_inst( warp_inst_t &inst );
 
@@ -2144,6 +2147,7 @@ public:
     
     // interconnect interface
     mem_fetch_interface *m_icnt;
+	 mem_fetch_interface *m_icnt_shader;
     shader_core_mem_fetch_allocator *m_mem_fetch_allocator;
     
     // fetch
@@ -2310,7 +2314,26 @@ private:
     simt_core_cluster *m_cluster;
 };
 
+class write_buffer_memory_interface : public mem_fetch_interface{
+	public:
+		write_buffer_memory_interface(shader_core_ctx* core, mem_fetch_interface* icnt){
+			m_core = core;
+			m_shader_icnt = icnt;
+		}
+		virtual bool full(unsigned size, bool write) const{
+			return m_core->m_ldst_unit->m_L1_WB_queue->full();
+		}
+		virtual void push(mem_fetch *mf)
+		{
+				mf->set_status(IN_L1_TO_WRITE_BUFFER_QUEUE, 0);
+				m_core->m_ldst_unit->m_L1_WB_queue->push(mf);
+		}
 
+		mem_fetch_interface* m_shader_icnt;
+	private:
+		shader_core_ctx* m_core;
+
+};
 inline int scheduler_unit::get_sid() const { return m_shader->get_sid(); }
 
 #endif /* SHADER_H */

@@ -298,7 +298,7 @@ void dram_t::cycle()
             else{
                mem_fetch *data = cmd->data; 
                   data->set_status(IN_PARTITION_MC_RETURNQ,gpu_sim_cycle+gpu_tot_sim_cycle); 
-                  if( data->get_access_type() != L1_WRBK_ACC && data->get_access_type() != L2_WRBK_ACC ) {
+                  if( data->get_access_type() != L1_WRBK_ACC && data->get_access_type() != L2_WRBK_ACC  && data->get_access_type() != L1WB_WRBK_ACC) {
                      data->set_reply();
                      returnq->push(data);
                   } else {

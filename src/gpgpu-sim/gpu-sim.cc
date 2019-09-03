@@ -267,6 +267,9 @@ void shader_core_config::reg_options(class OptionParser * opp)
     option_parser_register(opp, "-l1_latency", OPT_UINT32, &m_L1D_config.l1_latency,
                  "L1 Hit Latency",
                  "0");
+	 option_parser_register(opp, "-l1_write_buffer", OPT_BOOL, &m_L1D_config.m_has_write_buffer,
+			 "write buffer at l1D",
+			 "false");
     option_parser_register(opp, "-smem_latency", OPT_UINT32, &smem_latency,
                  "smem Latency",
                  "3");
@@ -1641,12 +1644,18 @@ void gpgpu_sim::cycle()
         // pop from memory controller to interconnect
         for (unsigned i=0;i<m_memory_config->m_n_mem_sub_partition;i++) {
             mem_fetch* mf = m_memory_sub_partition[i]->top();
-            if (mf) {
+            if(mf&&mf->get_request_uid()==1090302){
+					 			printf("present in gpu cycle\n");
+						 }
+
+				if (mf) {
                 unsigned response_size = mf->get_is_write()?mf->get_ctrl_size():mf->size();
                 if ( ::icnt_has_buffer( m_shader_config->mem2device(i), response_size ) ) {
                     //if (!mf->get_is_write())
                        mf->set_return_timestamp(gpu_sim_cycle+gpu_tot_sim_cycle);
                     mf->set_status(IN_ICNT_TO_SHADER,gpu_sim_cycle+gpu_tot_sim_cycle);
+						
+
                     ::icnt_push( m_shader_config->mem2device(i), mf->get_tpc(), mf, response_size );
                     m_memory_sub_partition[i]->pop();
                     partiton_replys_in_parallel_per_cycle++;
@@ -1654,7 +1663,8 @@ void gpgpu_sim::cycle()
                     gpu_stall_icnt2sh++;
                 }
             } else {
-               m_memory_sub_partition[i]->pop();
+               mem_fetch* should_be_NULL = m_memory_sub_partition[i]->pop();
+					assert(should_be_NULL == NULL);
             }
         }
     }
@@ -1823,10 +1833,11 @@ void gpgpu_sim::cycle()
          }
       }
 
-      if (!(gpu_sim_cycle % 50000)) {
+      if (!(gpu_sim_cycle % 1000)) {
          // deadlock detection 
          if (m_config.gpu_deadlock_detect && gpu_sim_insn == last_gpu_sim_insn) {
             gpu_deadlock = true;
+				m_cluster[0]->display_pipeline(0, stdout, 0,0);	
          } else {
             last_gpu_sim_insn = gpu_sim_insn;
          }

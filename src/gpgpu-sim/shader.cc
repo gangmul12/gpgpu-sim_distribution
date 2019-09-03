@@ -117,9 +117,14 @@ shader_core_ctx::shader_core_ctx( class gpgpu_sim *gpu,
     }
     
     // m_icnt = new shader_memory_interface(this,cluster);
+	 m_icnt = NULL;
+	 m_icnt_shader = NULL;
     if ( m_config->gpgpu_perfect_mem ) {
         m_icnt = new perfect_memory_interface(this,cluster);
-    } else {
+    } else if(m_config->m_L1D_config.m_has_write_buffer){
+		 m_icnt_shader = new shader_memory_interface(this, cluster);
+		 m_icnt = new write_buffer_memory_interface(this, m_icnt_shader);
+	 } else{
         m_icnt = new shader_memory_interface(this,cluster);
     }
     m_mem_fetch_allocator = new shader_core_mem_fetch_allocator(shader_id,tpc_id,mem_config);
@@ -1767,7 +1772,8 @@ mem_stage_stall_type ldst_unit::process_memory_access_queue_l1cache( l1_cache *c
 						count += (fm>>ii &1);
 					}
 					inc_ack = count;
-				}
+					if(m_config->m_L1D_config.m_has_write_buffer) inc_ack=1;
+				} 
 				for(unsigned i=0; i< inc_ack; ++i)
 					m_core->inc_store_req( inst.warp_id() );
 			}
@@ -2298,6 +2304,20 @@ ldst_unit::ldst_unit( mem_fetch_interface *icnt,
 	if(m_config->m_L1D_config.have_prefetcher){
 		m_stats->set_l1d_pointer(m_L1D);
 	}
+	if(m_config->m_L1D_config.m_has_write_buffer){
+		m_L1_WB_queue = new fifo_pipeline<mem_fetch>("l1-to-writebuffer",0,2);
+		char write_buffer_name[STRSIZE];
+      snprintf(write_buffer_name, STRSIZE, "L1_write_buffer_%03d", m_sid);
+		write_buffer_memory_interface* icnt = static_cast<write_buffer_memory_interface*>(m_icnt);
+		m_write_buffer = new write_buffer(write_buffer_name,
+														m_sid,
+														get_shader_normal_cache_id(),
+														icnt->m_shader_icnt,
+														m_mf_allocator,
+														IN_L1WB_MISS_QUEUE,
+														m_config->m_L1D_config.fetch_mask
+														);
+	}
         if(m_config->m_L1D_config.l1_latency > 0)
 	    {
         	for(int i=0; i<m_config->m_L1D_config.l1_latency; i++ )
@@ -2490,8 +2510,6 @@ void ldst_unit::cycle()
 
    if( !m_response_fifo.empty() ) {
        mem_fetch *mf = m_response_fifo.front();
-
-
 		 assert(! ( (!m_config->m_L1D_config.have_prefetcher) &&mf->is_prefetched()));
 		 if(mf->is_prefetched()){
 			 if(m_L1D->fill_port_free()){
@@ -2550,14 +2568,56 @@ void ldst_unit::cycle()
    m_L1T->cycle();
    m_L1C->cycle();
    if( m_L1D ) {
+		if(m_config->m_L1D_config.m_has_write_buffer){
+			m_write_buffer->cycle();
+		}
       if(m_config->m_L1D_config.have_prefetcher){
          m_L1D->pre_cycle(m_prefetcher, gpu_sim_cycle + gpu_tot_sim_cycle);
       }
       else{
          m_L1D->cycle();
       }
-	   if(m_config->m_L1D_config.l1_latency > 0)
-	   		L1_latency_queue_cycle();
+	   if(m_config->m_L1D_config.l1_latency > 0){
+			if(m_config->m_L1D_config.m_has_write_buffer){
+				write_buffer_memory_interface* icnt = static_cast<write_buffer_memory_interface*>(m_icnt);
+				if(!m_L1_WB_queue->empty() && !response_buffer_full()){
+					mem_fetch* mf = m_L1_WB_queue->top();
+					if(mf->get_access_type()==GLOBAL_ACC_R || mf->get_access_type()==GLOBAL_ACC_W){
+						std::list<cache_event> events;
+						enum cache_request_status status = m_write_buffer->access(mf->get_addr(), mf, gpu_sim_cycle+gpu_tot_sim_cycle, events);
+						bool write_sent = was_write_sent(events);
+						bool read_sent = was_read_sent(events);
+						if(read_sent){assert(mf->get_access_type()==GLOBAL_ACC_R);}
+						if(status == HIT){
+							 //write request is merged into write buffer
+							mf->set_reply();
+							this->fill(mf);
+							m_L1_WB_queue->pop();
+							
+						}
+						else if(status != RESERVATION_FAIL){
+							m_L1_WB_queue->pop();
+						}
+						else{
+							assert(!write_sent);
+							assert(!read_sent);
+						}
+
+					}
+					else if(!icnt->m_shader_icnt->full(mf->get_data_size(),false)){
+						assert(mf->get_access_type()!=L1_WRBK_ACC);
+						assert(mf->get_access_type()!=L2_WRBK_ACC);
+						icnt->m_shader_icnt->push(mf);
+						m_L1_WB_queue->pop();
+						mf->set_status(IN_ICNT_TO_MEM, gpu_sim_cycle + gpu_tot_sim_cycle);
+					}
+					else{
+						//printf("not accepted\n");
+					}
+				}
+			}
+			L1_latency_queue_cycle();
+		}
    }
 
    warp_inst_t &pipe_reg = *m_dispatch_reg;
@@ -3630,6 +3690,7 @@ void shader_core_ctx::store_ack( class mem_fetch *mf )
 {
 	assert( mf->get_type() == WRITE_ACK  || ( m_config->gpgpu_perfect_mem && mf->get_is_write() ) );
     unsigned warp_id = mf->get_wid();
+	 if(m_warp[warp_id].stores_done()) mf->print(stdout);
     m_warp[warp_id].dec_store_req();
 }
 
@@ -4244,6 +4305,8 @@ void simt_core_cluster::icnt_inject_request_packet(class mem_fetch *mf)
     case L2_WRBK_ACC: m_stats->gpgpu_n_mem_l2_writeback++; break;
     case L1_WR_ALLOC_R: m_stats->gpgpu_n_mem_l1_write_allocate++; break;
     case L2_WR_ALLOC_R: m_stats->gpgpu_n_mem_l2_write_allocate++; break;
+	 case L1WB_WR_ALLOC_R : break;
+	 case L1WB_WRBK_ACC : break;
     default: assert(0);
     }
 

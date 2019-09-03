@@ -214,7 +214,7 @@ void memory_partition_unit::dram_cycle()
         int dest_spid = global_sub_partition_id_to_local_id(dest_global_spid); 
         assert(m_sub_partition[dest_spid]->get_id() == dest_global_spid); 
         if (!m_sub_partition[dest_spid]->dram_L2_queue_full()) {
-            if( mf_return->get_access_type() == L1_WRBK_ACC ) {
+            if( mf_return->get_access_type() == L1_WRBK_ACC || mf_return->get_access_type() == L1WB_WRBK_ACC) {
                 m_sub_partition[dest_spid]->set_done(mf_return); 
                 delete mf_return;
             } else {
@@ -271,7 +271,7 @@ void memory_partition_unit::set_done( mem_fetch *mf )
     unsigned global_spid = mf->get_sub_partition_id(); 
     int spid = global_sub_partition_id_to_local_id(global_spid); 
     assert(m_sub_partition[spid]->get_id() == global_spid); 
-    if (mf->get_access_type() == L1_WRBK_ACC || mf->get_access_type() == L2_WRBK_ACC) {
+    if (mf->get_access_type() == L1_WRBK_ACC || mf->get_access_type() == L2_WRBK_ACC || mf->get_access_type() == L1WB_WRBK_ACC) {
         m_arbitration_metadata.return_credit(spid); 
         MEMPART_DPRINTF("mem_fetch request %p return from dram to sub partition %d\n", mf, spid); 
     }
@@ -356,6 +356,7 @@ void memory_sub_partition::cache_cycle( unsigned cycle )
     if( !m_config->m_L2_config.disabled()) {
        if ( m_L2cache->access_ready() && !m_L2_icnt_queue->full() ) {
            mem_fetch *mf = m_L2cache->next_access();
+
            if(mf->get_access_type() != L2_WR_ALLOC_R){ // Don't pass write allocate read request back to upper level cache
 				mf->set_reply();
 				mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
@@ -416,24 +417,31 @@ void memory_sub_partition::cache_cycle( unsigned cycle )
                     if( !write_sent ) {
                         // L2 cache replies
                         assert(!read_sent);
-                        if( mf->get_access_type() == L1_WRBK_ACC ) {
+                        if( mf->get_access_type() == L1_WRBK_ACC || mf->get_access_type() == L1WB_WRBK_ACC) {
                             m_request_tracker.erase(mf);
                             delete mf;
                         } else {
                             mf->set_reply();
                             mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
                             m_L2_icnt_queue->push(mf);
+
                         }
                         m_icnt_L2_queue->pop();
                     } else {
                         assert(write_sent);
                         m_icnt_L2_queue->pop();
+		
                     }
                 } else if ( status != RESERVATION_FAIL ) {
                 	if(mf->is_write() && (m_config->m_L2_config.m_write_alloc_policy == FETCH_ON_WRITE || m_config->m_L2_config.m_write_alloc_policy == LAZY_FETCH_ON_READ) && !was_writeallocate_sent(events)) {
-                		mf->set_reply();
-                		mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
-                		m_L2_icnt_queue->push(mf);
+							if(mf->get_access_type() == L1WB_WRBK_ACC){
+								m_request_tracker.erase(mf);
+								delete mf;
+							}else{
+                			mf->set_reply();
+                			mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
+                			m_L2_icnt_queue->push(mf);
+							}
                 	}
                     // L2 cache accepted request
                     m_icnt_L2_queue->pop();
@@ -650,13 +658,14 @@ std::vector<mem_fetch*> memory_sub_partition::breakdown_request_to_sector_reques
 			 result.push_back(n_mf);
 			 byte_sector_mask <<= SECTOR_SIZE;
 		}
-	} else if(mf->is_approx() && mf->get_access_type() == GLOBAL_ACC_W){
+	} else if(mf->is_approx() && (mf->get_access_type() == GLOBAL_ACC_W || mf->get_access_type() == L1WB_WRBK_ACC)){
 		assert(mf->get_data_size()<32);
 		result.push_back(mf);
 //		mf->print(stdout);
    } else {
 		 printf("Invalid sector received, address = 0x%06x, sector mask = %d, byte mask = , data size = %d",
 					    		mf->get_addr(), mf->get_access_sector_mask().count(), mf->get_data_size());
+		 mf->print(stdout);
 		 assert(0 && "Undefined data size is received");
 	}
 
@@ -693,25 +702,31 @@ void memory_sub_partition::push( mem_fetch* m_req, unsigned long long cycle )
 mem_fetch* memory_sub_partition::pop() 
 {
     mem_fetch* mf = m_L2_icnt_queue->pop();
+
     m_request_tracker.erase(mf);
     if ( mf && mf->isatomic() )
         mf->do_atomic();
-    if( mf && (mf->get_access_type() == L2_WRBK_ACC || mf->get_access_type() == L1_WRBK_ACC) ) {
-        delete mf;
+    if( mf && (mf->get_access_type() == L2_WRBK_ACC || mf->get_access_type() == L1_WRBK_ACC || mf->get_access_type() == L1WB_WRBK_ACC) ) {
+       
+		 delete mf;
+
         mf = NULL;
-    } 
+    }
+
     return mf;
 }
 
 mem_fetch* memory_sub_partition::top() 
 {
     mem_fetch *mf = m_L2_icnt_queue->top();
-    if( mf && (mf->get_access_type() == L2_WRBK_ACC || mf->get_access_type() == L1_WRBK_ACC) ) {
+
+	 if( mf && (mf->get_access_type() == L2_WRBK_ACC || mf->get_access_type() == L1_WRBK_ACC || mf->get_access_type() == L1WB_WRBK_ACC) ) {
         m_L2_icnt_queue->pop();
-        m_request_tracker.erase(mf);
-        delete mf;
-        mf = NULL;
-    } 
+        	m_request_tracker.erase(mf);
+        	delete mf;
+        	mf = NULL;
+    	}
+
     return mf;
 }
 
