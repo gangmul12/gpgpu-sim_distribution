@@ -2157,8 +2157,9 @@ l2_cache::pre_access( new_addr_type addr,
 void write_buffer::send_write_request(mem_fetch *mf, cache_event request, unsigned time, std::list<cache_event> &events,mem_access_sector32_mask_t sector_mask ){
 
     events.push_back(request);
-	 //printf("==original==");
-	 //mf->print(stdout);
+	 num_write_sent++;
+	 byte_write_sent += mf->get_data_size();
+
 	 std::vector<mem_fetch*> reqs;
 	 reqs =breakdown_request(mf);
 	 for(unsigned ii = 0 ; ii < reqs.size() ; ii++){ 

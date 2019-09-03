@@ -2030,6 +2030,8 @@ public:
 				m_buffer_tag_array = new buffer_tag_array(core_id, type_id);
 				m_wrbk_type=L1WB_WRBK_ACC;
 				m_fetch_mask=fm;
+				num_write_sent=0;
+				byte_write_sent=0;
 	}
 	virtual ~write_buffer(){delete m_buffer_tag_array;}
 	virtual enum cache_request_status
@@ -2055,6 +2057,8 @@ protected:
 	}
    std::vector<mem_fetch*> breakdown_request(mem_fetch* mf);
 	unsigned m_fetch_mask;
+	unsigned num_write_sent;
+	unsigned long long byte_write_sent;
 
 };
 
