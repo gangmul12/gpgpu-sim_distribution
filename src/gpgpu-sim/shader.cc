@@ -2315,7 +2315,8 @@ ldst_unit::ldst_unit( mem_fetch_interface *icnt,
 														icnt->m_shader_icnt,
 														m_mf_allocator,
 														IN_L1WB_MISS_QUEUE,
-														m_config->m_L1D_config.fetch_mask
+														m_config->m_L1D_config.fetch_mask,
+														m_config->m_L1D_config.m_write_buffer_assoc
 														);
 	}
         if(m_config->m_L1D_config.l1_latency > 0)
@@ -3752,6 +3753,19 @@ unsigned ldst_unit::get_max_dist(){
 }
 unsigned shader_core_ctx::get_dist_size(){
     return m_ldst_unit->get_dist_size();
+}
+void simt_core_cluster::print_writebuffer_stat(){
+	for(unsigned i = 0 ; i < m_config->n_simt_cores_per_cluster; i++){
+		m_core[i]->print_writebuffer_stat();
+	}
+}
+void shader_core_ctx::print_writebuffer_stat(){
+	printf("====Writebuffer for shader %u====\n", m_sid);
+	m_ldst_unit->print_writebuffer_stat();
+}
+void ldst_unit::print_writebuffer_stat(){
+	if(m_write_buffer)
+		m_write_buffer->print_stats();
 }
 unsigned ldst_unit::get_dist_size(){
     return m_L1D->get_dist_size();

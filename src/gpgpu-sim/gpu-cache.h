@@ -1045,6 +1045,7 @@ public:
 	l1d_cache_config() : cache_config(){}
 	virtual unsigned set_index(new_addr_type addr) const;
 	unsigned l1_latency;
+	unsigned m_write_buffer_assoc;
 };
 
 class l2_cache_config : public cache_config {
@@ -1126,7 +1127,7 @@ protected:
 class buffer_tag_array {
 public:
     // Use this constructor
-    buffer_tag_array(int core_id, int type_id );
+    buffer_tag_array(int core_id, int type_id, unsigned assoc );
     ~buffer_tag_array();
 
     enum cache_request_status probe( new_addr_type addr, unsigned &idx, mem_fetch* mf) const;
@@ -1156,7 +1157,9 @@ protected:
 	 unsigned m_line_num;
 	 unsigned m_line_size_log2;
 	 unsigned m_line_size;
-	 unsigned get_set_index(new_addr_type addr)const {return (addr >> m_line_size_log2)&(m_line_num-1);}
+	 unsigned m_assoc;
+	 unsigned m_set;
+	 unsigned get_set_index(new_addr_type addr)const {return (addr >> m_line_size_log2)&(m_set-1);}
 	 new_addr_type get_tag(new_addr_type addr)const {return addr & ~(new_addr_type)(m_line_size-1);}
 	 new_addr_type get_block_addr(new_addr_type addr)const {return get_tag(addr);}
 	 void calculate_mask(mem_fetch* mf, mem_access_sector32_mask_t &mask) const;
@@ -2020,17 +2023,24 @@ class write_buffer{
 public:
 	write_buffer(const char *name,
 			int core_id, int type_id, mem_fetch_interface *memport,
-         mem_fetch_allocator *mfcreator, enum mem_fetch_status status, unsigned fm)
+         mem_fetch_allocator *mfcreator, enum mem_fetch_status status, unsigned fm, unsigned assoc)
 			{
 				m_name = name;
 				m_miss_queue_status = status;
 				m_miss_queue_size = 128;
+				m_read_miss_queue_size = 8;
 				m_memfetch_creator=mfcreator;
 				m_memport = memport;
-				m_buffer_tag_array = new buffer_tag_array(core_id, type_id);
+				m_buffer_tag_array = new buffer_tag_array(core_id, type_id, assoc);
 				m_wrbk_type=L1WB_WRBK_ACC;
 				m_fetch_mask=fm;
+				num_hit_rd=0;
+				num_hit_wr=0;
+				num_write_from_read=0;
+				num_write_from_write=0;
 				num_write_sent=0;
+				num_reserve_fail = 0;
+				num_total_access=0;
 				byte_write_sent=0;
 	}
 	virtual ~write_buffer(){delete m_buffer_tag_array;}
@@ -2042,22 +2052,34 @@ public:
 	void send_write_request(mem_fetch* mf, cache_event request, unsigned time, std::list<cache_event>&events, mem_access_sector32_mask_t sector_mask);
 	void bypass_read_request(mem_fetch* mf, unsigned time, std::list<cache_event>& events);
 	void cycle();
+	void print_stats();
 
 protected:
 	buffer_tag_array* m_buffer_tag_array;
 	mem_fetch_interface* m_memport;
 	std::string m_name;
    std::list<mem_fetch*> m_miss_queue;
+   std::list<mem_fetch*> m_read_miss_queue;
 	unsigned m_miss_queue_size;
+	unsigned m_read_miss_queue_size;
 	mem_fetch_allocator* m_memfetch_creator;
 	mem_access_type m_wrbk_type;
    enum mem_fetch_status m_miss_queue_status;
 	bool miss_queue_full(unsigned int additional){ 
 		return m_miss_queue.size()+additional > m_miss_queue_size;
 	}
+	bool read_miss_queue_full(unsigned int additional){ 
+		return m_read_miss_queue.size()+additional > m_read_miss_queue_size;
+	}
    std::vector<mem_fetch*> breakdown_request(mem_fetch* mf);
 	unsigned m_fetch_mask;
+	unsigned num_write_from_read;
+	unsigned num_write_from_write;
 	unsigned num_write_sent;
+	unsigned num_hit_rd;
+	unsigned num_hit_wr;
+	unsigned num_total_access;
+	unsigned num_reserve_fail;
 	unsigned long long byte_write_sent;
 
 };

@@ -270,6 +270,10 @@ void shader_core_config::reg_options(class OptionParser * opp)
 	 option_parser_register(opp, "-l1_write_buffer", OPT_BOOL, &m_L1D_config.m_has_write_buffer,
 			 "write buffer at l1D",
 			 "false");
+	  option_parser_register(opp, "-l1_write_buffer_assoc", OPT_UINT32, &m_L1D_config.m_write_buffer_assoc,
+			 "write buffer assoc at l1D",
+			 "1");
+
     option_parser_register(opp, "-smem_latency", OPT_UINT32, &smem_latency,
                  "smem Latency",
                  "3");
@@ -1221,6 +1225,7 @@ void gpgpu_sim::gpu_print_stat()
    core_cache_stats.clear();
    for(unsigned i=0; i<m_config.num_cluster(); i++){
        m_cluster[i]->get_cache_stats(core_cache_stats);
+		 m_cluster[i]->print_writebuffer_stat();
    }
    printf("\nTotal_core_cache_stats:\n");
    core_cache_stats.print_stats(stdout, "Total_core_cache_stats_breakdown");

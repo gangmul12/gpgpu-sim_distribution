@@ -2171,7 +2171,7 @@ void write_buffer::send_write_request(mem_fetch *mf, cache_event request, unsign
 void write_buffer::bypass_read_request(mem_fetch *mf, unsigned time, std::list<cache_event>& events){
 	events.push_back(READ_REQUEST_SENT);
 		
-	m_miss_queue.push_back(mf);
+	m_read_miss_queue.push_back(mf);
 	mf->set_status(m_miss_queue_status, time);
 }
 std::vector<mem_fetch*> write_buffer::breakdown_request(mem_fetch* mf){
@@ -2223,31 +2223,43 @@ write_buffer::access( new_addr_type addr,
 	 enum cache_request_status cache_status = RESERVATION_FAIL;
 	 bool wb = false;
 	 evicted_sector_block_info evicted;
+	 num_total_access++;
 	 if(probe_status == HIT){
 		 cache_status = m_buffer_tag_array->access(block_addr, time, cache_index, wb, evicted, mf);
+		 if(wr) num_hit_wr++;
+		 else num_hit_rd++;
 	 }
 	 else if(probe_status != RESERVATION_FAIL){
 		 if(!wr){//READ
-			 if(miss_queue_full(32)){
+			 if(read_miss_queue_full(0)){
 				 cache_status = RESERVATION_FAIL;
+				 num_reserve_fail++;
 				 //printf("read miss queue full resfail\n");
 			 }
 			 else{
-				 if(probe_status == PARTIAL_SECTOR_MISS){
+				 if(probe_status == PARTIAL_SECTOR_MISS && miss_queue_full(31)){
+				 	 num_reserve_fail++;
+					 return RESERVATION_FAIL;
+				 }
+				 else if(probe_status == PARTIAL_SECTOR_MISS) {
 					 m_buffer_tag_array->access(block_addr, time, cache_index, wb, evicted, mf);
 					 mem_fetch* mf_wb = m_memfetch_creator->alloc(evicted.m_block_addr, m_wrbk_type, evicted.m_modified_size, true);
 					 mf_wb->set_approx();
 					 sector32_cache_block* block = m_buffer_tag_array->get_block(cache_index);
+					 num_write_from_read++;
 					 send_write_request(mf_wb, WRITE_BACK_REQUEST_SENT, time, events, evicted.m_sector);
 					 block->invalidate();
+					 
 				 }
 				 bypass_read_request(mf, time, events);
 				 cache_status = MISS;
+				 
 			 }
 		 }
 		 else{//WRITE
 			 if(miss_queue_full(31)){
 			 	 cache_status = RESERVATION_FAIL;
+				 num_reserve_fail++;
 				 //printf("write miss queue full resfail\n");
 			 }
 			 else{
@@ -2257,6 +2269,7 @@ write_buffer::access( new_addr_type addr,
 					block->invalidate();
 					mem_fetch* mf_wb = m_memfetch_creator->alloc(evicted.m_block_addr, m_wrbk_type, evicted.m_modified_size, true);
 					mf_wb->set_approx();
+					num_write_from_write++;
 					send_write_request(mf_wb, WRITE_BACK_REQUEST_SENT, time, events, evicted.m_sector);
 				}
 			 }
@@ -2264,6 +2277,7 @@ write_buffer::access( new_addr_type addr,
 	 }
 
 	 else{
+		 num_reserve_fail++;
 		 //printf("resfail at probe\n");
 		 //m_stats.inc_fail_stats(mf->get_access_type(), LINE_ALLOC_FAIL);
 	 }
@@ -2276,7 +2290,15 @@ write_buffer::access( new_addr_type addr,
  
 }
 void write_buffer::cycle(){
-	if ( !m_miss_queue.empty() ) {
+	if ( !m_read_miss_queue.empty()){
+		  mem_fetch *mf = m_read_miss_queue.front();
+        if ( !m_memport->full(mf->size(),mf->get_is_write()) ) {
+            m_read_miss_queue.pop_front();
+            m_memport->push(mf);
+        }
+
+	}
+	else if ( !m_miss_queue.empty() ) {
         mem_fetch *mf = m_miss_queue.front();
         if ( !m_memport->full(mf->size(),mf->get_is_write()) ) {
             m_miss_queue.pop_front();
@@ -2285,7 +2307,16 @@ void write_buffer::cycle(){
     }
 
 }
-
+void write_buffer::print_stats(){
+	printf("\ttotal access num : %u\n", num_total_access);
+	printf("\twrite hit : %u\n", num_hit_wr);
+	printf("\tread hit : %u\n", num_hit_rd);
+	printf("\treservation fail : %u\n", num_reserve_fail);
+	printf("\tnum write sent : %u\n", num_write_sent);
+	printf("\t\tfrom write : %u\n", num_write_from_write);
+	printf("\t\tfrom wread : %u\n", num_write_from_read);
+	printf("\taverage write size : %u\n", byte_write_sent/num_write_sent);
+}
 /// Access function for tex_cache
 /// return values: RESERVATION_FAIL if request could not be accepted
 /// otherwise returns HIT_RESERVED or MISS; NOTE: *never* returns HIT
@@ -2430,10 +2461,14 @@ void tex_cache::display_state( FILE *fp ) const
 /******************************************************************************************************************************************/
 buffer_tag_array::buffer_tag_array(
                       int core_id,
-                      int type_id )
+                      int type_id,
+							 unsigned assoc)
 {
     //assert( m_config.m_write_policy == READ_ONLY ); Old assert
 	m_line_num = 8;
+	m_assoc = assoc;
+	m_set = m_line_num/m_assoc;
+	assert(m_line_num%m_assoc==0);
 	m_line_size = 1024;
 	m_line_size_log2 = 10;
 	m_lines = new sector32_cache_block*[m_line_num];
@@ -2454,30 +2489,32 @@ enum cache_request_status buffer_tag_array::probe( new_addr_type addr, unsigned 
     unsigned long long valid_timestamp = (unsigned)-1;
 
     // check for hit or pending hit
-    unsigned index = set_index;
-    buffer_block_t *line = m_lines[index];
-    if (line->m_tag == tag) {
-         if ( line->get_status(mask) == MODIFIED) {
-					idx = index;
-					return HIT;
-        } else if ( line->is_valid_line() && line->get_status(mask) == INVALID ) {
-            idx = index;
-            return SECTOR_MISS;
-        } else if ( line->get_status(mask) == PARTIAL){
-			  idx = index;
-			  return PARTIAL_SECTOR_MISS;
-		  }else {
-            assert( line->get_status(mask) == INVALID );
-        }
-	 }
-	 assert(!line->is_reserved_line());
-	 if (line->is_invalid_line()) {
-		 invalid_line = index;
-	 } else {
-		 // valid line : keep track of most appropriate replacement candidate
-		 if ( line->get_last_access_time() < valid_timestamp ) {
-			 valid_timestamp = line->get_last_access_time();
-			 valid_line = index;
+	 for(unsigned way = 0 ; way < m_assoc; way++){
+		 unsigned index = set_index*m_assoc+way;
+		 buffer_block_t *line = m_lines[index];
+		 if (line->m_tag == tag) {
+			 if ( line->get_status(mask) == MODIFIED) {
+				 idx = index;
+				 return HIT;
+			 } else if ( line->is_valid_line() && line->get_status(mask) == INVALID ) {
+				 idx = index;
+				 return SECTOR_MISS;
+			 } else if ( line->get_status(mask) == PARTIAL){
+				 idx = index;
+				 return PARTIAL_SECTOR_MISS;
+			 }else {
+				 assert( line->get_status(mask) == INVALID );
+			 }
+		 }
+		 assert(!line->is_reserved_line());
+		 if (line->is_invalid_line()) {
+			 invalid_line = index;
+		 } else {
+			 // valid line : keep track of most appropriate replacement candidate
+			 if ( line->get_last_access_time() < valid_timestamp ) {
+				 valid_timestamp = line->get_last_access_time();
+				 valid_line = index;
+			 }
 		 }
 	 }
 

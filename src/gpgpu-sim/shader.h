@@ -1303,7 +1303,7 @@ public:
     unsigned get_min_dist();
     unsigned get_max_dist();
     unsigned get_dist_size();
-
+	 void print_writebuffer_stat();
 	 fifo_pipeline<mem_fetch>* m_L1_WB_queue;
 
 
@@ -2081,6 +2081,7 @@ public:
 	 unsigned get_min_dist();
 	 unsigned get_max_dist();
 	 unsigned get_dist_size();
+	 void print_writebuffer_stat();
 
 
 
@@ -2263,6 +2264,7 @@ public:
     unsigned get_max_dist();
     unsigned get_min_dist();
     unsigned get_dist_size();
+	 void print_writebuffer_stat();
 
 
 private:
