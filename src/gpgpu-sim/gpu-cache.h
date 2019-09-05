@@ -2027,8 +2027,8 @@ public:
 			{
 				m_name = name;
 				m_miss_queue_status = status;
-				m_miss_queue_size = 128;
-				m_read_miss_queue_size = 8;
+				m_miss_queue_size = 512;
+				m_read_miss_queue_size = 512;
 				m_memfetch_creator=mfcreator;
 				m_memport = memport;
 				m_buffer_tag_array = new buffer_tag_array(core_id, type_id, assoc);
@@ -2040,6 +2040,9 @@ public:
 				num_write_from_write=0;
 				num_write_sent=0;
 				num_reserve_fail = 0;
+				num_read_reserve_fail=0;
+				num_write_reserve_fail=0;
+				num_bypass_read=0;
 				num_total_access=0;
 				byte_write_sent=0;
 	}
@@ -2080,6 +2083,9 @@ protected:
 	unsigned num_hit_wr;
 	unsigned num_total_access;
 	unsigned num_reserve_fail;
+	unsigned num_read_reserve_fail;
+	unsigned num_write_reserve_fail;
+	unsigned num_bypass_read;
 	unsigned long long byte_write_sent;
 
 };

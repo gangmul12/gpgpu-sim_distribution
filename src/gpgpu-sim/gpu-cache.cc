@@ -2234,11 +2234,13 @@ write_buffer::access( new_addr_type addr,
 			 if(read_miss_queue_full(0)){
 				 cache_status = RESERVATION_FAIL;
 				 num_reserve_fail++;
+				 num_read_reserve_fail++;
 				 //printf("read miss queue full resfail\n");
 			 }
 			 else{
 				 if(probe_status == PARTIAL_SECTOR_MISS && miss_queue_full(31)){
 				 	 num_reserve_fail++;
+					 num_read_reserve_fail++;
 					 return RESERVATION_FAIL;
 				 }
 				 else if(probe_status == PARTIAL_SECTOR_MISS) {
@@ -2252,6 +2254,7 @@ write_buffer::access( new_addr_type addr,
 					 
 				 }
 				 bypass_read_request(mf, time, events);
+				 num_bypass_read++;
 				 cache_status = MISS;
 				 
 			 }
@@ -2260,6 +2263,7 @@ write_buffer::access( new_addr_type addr,
 			 if(miss_queue_full(31)){
 			 	 cache_status = RESERVATION_FAIL;
 				 num_reserve_fail++;
+				 num_write_reserve_fail++;
 				 //printf("write miss queue full resfail\n");
 			 }
 			 else{
@@ -2312,6 +2316,9 @@ void write_buffer::print_stats(){
 	printf("\twrite hit : %u\n", num_hit_wr);
 	printf("\tread hit : %u\n", num_hit_rd);
 	printf("\treservation fail : %u\n", num_reserve_fail);
+	printf("\t\tread fail : %u\n", num_read_reserve_fail);
+	printf("\t\twrite fail: %u\n", num_write_reserve_fail);
+	printf("\tbypassed read : %u\n", num_bypass_read);
 	printf("\tnum write sent : %u\n", num_write_sent);
 	printf("\t\tfrom write : %u\n", num_write_from_write);
 	printf("\t\tfrom wread : %u\n", num_write_from_read);
