@@ -2322,7 +2322,8 @@ void write_buffer::print_stats(){
 	printf("\tnum write sent : %u\n", num_write_sent);
 	printf("\t\tfrom write : %u\n", num_write_from_write);
 	printf("\t\tfrom wread : %u\n", num_write_from_read);
-	printf("\taverage write size : %u\n", byte_write_sent/num_write_sent);
+	if(num_write_sent)
+		printf("\taverage write size : %u\n", byte_write_sent/num_write_sent);
 }
 /// Access function for tex_cache
 /// return values: RESERVATION_FAIL if request could not be accepted
